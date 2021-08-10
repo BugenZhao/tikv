@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs::File as StdFile;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::Arc;
 
+use backup_text::rwer::TextWriter;
 use engine_rocks::raw::DB;
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
@@ -11,27 +14,61 @@ use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::brpb::File;
 use kvproto::metapb::Region;
+use protobuf::Message;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{
     self, box_err, error,
     time::{Instant, Limiter},
 };
-use txn_types::KvPair;
+use tipb::TableInfo;
+use txn_types::{Key, KvPair, TimeStamp, WriteRef};
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
 
-struct Writer {
-    writer: RocksSstWriter,
+pub trait LocalWriter {
+    type LocalReader: Read + Send + 'static;
+    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
+    fn finish_read(self) -> Result<(u64, Self::LocalReader)>;
+}
+
+impl LocalWriter for RocksSstWriter {
+    type LocalReader = <RocksSstWriter as SstWriter>::ExternalSstFileReader;
+
+    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
+        <RocksSstWriter as SstWriter>::put(self, key, val)?;
+        Ok(())
+    }
+    fn finish_read(self) -> Result<(u64, Self::LocalReader)> {
+        let (sst_info, r) = <RocksSstWriter as SstWriter>::finish_read(self)?;
+        Ok((sst_info.file_size(), r))
+    }
+}
+
+impl LocalWriter for TextWriter {
+    type LocalReader = BufReader<StdFile>;
+
+    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
+        self.put_line(key, val)?;
+        Ok(())
+    }
+
+    fn finish_read(self) -> Result<(u64, Self::LocalReader)> {
+        Ok((self.get_size(), BufReader::new(self.finish()?)))
+    }
+}
+
+struct Writer<LW: LocalWriter> {
+    writer: LW,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
     digest: crc64fast::Digest,
 }
 
-impl Writer {
-    fn new(writer: RocksSstWriter) -> Self {
+impl<LW: LocalWriter> Writer<LW> {
+    fn new(writer: LW) -> Self {
         Writer {
             writer,
             total_kvs: 0,
@@ -78,10 +115,10 @@ impl Writer {
         limiter: Limiter,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
-        let (sst_info, sst_reader) = self.writer.finish_read()?;
+        let (file_size, sst_reader) = self.writer.finish_read()?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
-            .observe(sst_info.file_size() as f64);
+            .observe(file_size as f64);
         let file_name = format!("{}_{}.sst", name, cf);
 
         let (reader, hasher) = Sha256Reader::new(sst_reader)
@@ -89,7 +126,7 @@ impl Writer {
         storage.write(
             &file_name,
             Box::new(limiter.limit(AllowStdIo::new(reader))),
-            sst_info.file_size(),
+            file_size,
         )?;
         let sha256 = hasher
             .lock()
@@ -105,7 +142,7 @@ impl Writer {
         file.set_total_kvs(self.total_kvs);
         file.set_total_bytes(self.total_bytes);
         file.set_cf(cf.to_owned());
-        file.set_size(sst_info.file_size());
+        file.set_size(file_size);
         Ok(file)
     }
 
@@ -114,7 +151,12 @@ impl Writer {
     }
 }
 
-pub struct BackupWriterBuilder {
+pub trait BackupWriterBuilder {
+    type LW: LocalWriter;
+    fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter<Self::LW>>;
+}
+
+pub struct BackupSstWriterBuilder {
     store_id: u64,
     limiter: Limiter,
     region: Region,
@@ -124,7 +166,7 @@ pub struct BackupWriterBuilder {
     sst_max_size: u64,
 }
 
-impl BackupWriterBuilder {
+impl BackupSstWriterBuilder {
     pub fn new(
         store_id: u64,
         limiter: Limiter,
@@ -133,7 +175,7 @@ impl BackupWriterBuilder {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
-    ) -> BackupWriterBuilder {
+    ) -> BackupSstWriterBuilder {
         Self {
             store_id,
             limiter,
@@ -144,55 +186,104 @@ impl BackupWriterBuilder {
             sst_max_size,
         }
     }
+}
 
-    pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter> {
+impl BackupWriterBuilder for BackupSstWriterBuilder {
+    type LW = RocksSstWriter;
+    fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter<Self::LW>> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key);
-        BackupWriter::new(
-            self.db.clone(),
+        let default = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(CF_DEFAULT)
+            .set_db(RocksEngine::from_ref(&self.db))
+            .set_compression_type(self.compression_type)
+            .set_compression_level(self.compression_level)
+            .build(&name)?;
+        let write = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(CF_WRITE)
+            .set_db(RocksEngine::from_ref(&self.db))
+            .set_compression_type(self.compression_type)
+            .set_compression_level(self.compression_level)
+            .build(&name)?;
+        BackupWriter::<RocksSstWriter>::new(
             &name,
-            self.compression_type,
-            self.compression_level,
             self.limiter.clone(),
+            default,
+            write,
+            self.sst_max_size,
+        )
+    }
+}
+
+pub struct BackupTextWriterBuilder {
+    store_id: u64,
+    limiter: Limiter,
+    region: Region,
+    sst_max_size: u64,
+    table_info: TableInfo,
+}
+
+impl BackupTextWriterBuilder {
+    pub fn new(
+        store_id: u64,
+        limiter: Limiter,
+        region: Region,
+        sst_max_size: u64,
+        table_info_data: &[u8],
+    ) -> BackupTextWriterBuilder {
+        let mut table_info = TableInfo::default();
+        table_info.merge_from_bytes(&table_info_data).unwrap();
+        Self {
+            store_id,
+            limiter,
+            region,
+            sst_max_size,
+            table_info,
+        }
+    }
+}
+
+impl BackupWriterBuilder for BackupTextWriterBuilder {
+    type LW = TextWriter;
+    fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter<Self::LW>> {
+        let key = file_system::sha256(&start_key).ok().map(hex::encode);
+        let store_id = self.store_id;
+        let name = backup_file_name(store_id, &self.region, key);
+        let (default, write) = (
+            TextWriter::new(self.table_info.clone(), CF_DEFAULT),
+            TextWriter::new(self.table_info.clone(), CF_WRITE),
+        );
+        BackupWriter::<TextWriter>::new(
+            &name,
+            self.limiter.clone(),
+            default,
+            write,
             self.sst_max_size,
         )
     }
 }
 
 /// A writer writes txn entries into SST files.
-pub struct BackupWriter {
+pub struct BackupWriter<LW: LocalWriter> {
     name: String,
-    default: Writer,
-    write: Writer,
+    default: Writer<LW>,
+    write: Writer<LW>,
     limiter: Limiter,
     sst_max_size: u64,
 }
 
-impl BackupWriter {
+impl<LW: LocalWriter> BackupWriter<LW> {
     /// Create a new BackupWriter.
     pub fn new(
-        db: Arc<DB>,
         name: &str,
-        compression_type: Option<SstCompressionType>,
-        compression_level: i32,
         limiter: Limiter,
+        default: LW,
+        write: LW,
         sst_max_size: u64,
-    ) -> Result<BackupWriter> {
-        let default = RocksSstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_cf(CF_DEFAULT)
-            .set_db(RocksEngine::from_ref(&db))
-            .set_compression_type(compression_type)
-            .set_compression_level(compression_level)
-            .build(name)?;
-        let write = RocksSstWriterBuilder::new()
-            .set_in_memory(true)
-            .set_cf(CF_WRITE)
-            .set_db(RocksEngine::from_ref(&db))
-            .set_compression_type(compression_type)
-            .set_compression_level(compression_level)
-            .build(name)?;
+    ) -> Result<BackupWriter<LW>> {
         let name = name.to_owned();
         Ok(BackupWriter {
             name,
@@ -229,6 +320,43 @@ impl BackupWriter {
             } else {
                 self.write.update_with(e, need_checksum)?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn write_text<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
+    where
+        I: Iterator<Item = TxnEntry>,
+    {
+        for mut e in entries {
+            match &mut e {
+                TxnEntry::Commit {
+                    ref mut default,
+                    ref mut write,
+                    ..
+                } => {
+                    if default.0.is_empty() {
+                        // Move the short value from `write_cf` to `default_cf`
+                        let mut write_ref = WriteRef::parse(&write.1).unwrap();
+                        default.0 = Key::from_encoded(write.0.clone())
+                            .truncate_ts()
+                            .unwrap()
+                            .append_ts(write_ref.start_ts)
+                            .into_encoded();
+                        default.1 = {
+                            let short_value = write_ref.short_value.take();
+                            short_value.unwrap().to_vec()
+                        };
+                        write.1 = write_ref.to_bytes();
+                    }
+                    self.default.write(&default.0, &default.1)?;
+                    self.write.write(&write.0, &write.1)?;
+                }
+                TxnEntry::Prewrite { .. } => {
+                    return Err(Error::Other("prewrite is not supported".into()));
+                }
+            }
+            self.default.update_with(e, need_checksum)?;
         }
         Ok(())
     }
@@ -277,7 +405,7 @@ impl BackupWriter {
 pub struct BackupRawKVWriter {
     name: String,
     cf: CfName,
-    writer: Writer,
+    writer: Writer<RocksSstWriter>,
     limiter: Limiter,
 }
 
@@ -416,28 +544,22 @@ mod tests {
         let mut r = kvproto::metapb::Region::default();
         r.set_id(1);
         r.mut_peers().push(new_peer(1, 1));
-        let mut writer = BackupWriter::new(
+
+        let writer_builder = BackupSstWriterBuilder::new(
+            1,
+            Limiter::new(INFINITY),
+            r,
             db.get_sync_db(),
-            "foo",
             None,
             0,
-            Limiter::new(INFINITY),
             144 * 1024 * 1024,
-        )
-        .unwrap();
+        );
+        let mut writer = writer_builder.build(b"foo".to_vec()).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(
-            db.get_sync_db(),
-            "foo1",
-            None,
-            0,
-            Limiter::new(INFINITY),
-            144 * 1024 * 1024,
-        )
-        .unwrap();
+        let mut writer = writer_builder.build(b"foo1".to_vec()).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -463,15 +585,7 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(
-            db.get_sync_db(),
-            "foo2",
-            None,
-            0,
-            Limiter::new(INFINITY),
-            144 * 1024 * 1024,
-        )
-        .unwrap();
+        let mut writer = writer_builder.build(b"foo2".to_vec()).unwrap();
         writer
             .write(
                 vec![

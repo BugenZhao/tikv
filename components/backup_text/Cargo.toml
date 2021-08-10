@@ -1,0 +1,12 @@
+[package]
+name = "backup_text"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }

@@ -211,6 +211,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "backup_text",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -230,6 +231,7 @@ dependencies = [
  "online_config",
  "pd_client",
  "prometheus",
+ "protobuf",
  "raft",
  "raftstore",
  "rand 0.8.3",
@@ -244,8 +246,19 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tipb",
  "txn_types",
  "yatp",
+]
+
+[[package]]
+name = "backup_text"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "engine_traits",
+ "tidb_query_datatype",
+ "tipb",
 ]
 
 [[package]]
@@ -2108,7 +2121,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#317f69fb54b44619271df82ec163764032184a85"
+source = "git+https://github.com/NingLin-P/kvproto?branch=br-text#a1812f09ade22e3127a89d397157a392df491a09"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4453,6 +4466,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
+ "backup_text",
  "crc32fast",
  "encryption",
  "engine_rocks",
@@ -4468,6 +4482,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "prometheus",
+ "protobuf",
  "serde",
  "serde_derive",
  "slog",
@@ -4478,6 +4493,7 @@ dependencies = [
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "tipb",
  "tokio",
  "txn_types",
  "uuid",

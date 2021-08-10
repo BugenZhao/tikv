@@ -399,6 +399,8 @@ where
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                req.get_is_text_format(),
+                req.get_table_info().to_owned(),
                 limiter,
                 engine,
             );

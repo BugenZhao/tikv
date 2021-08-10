@@ -38,7 +38,7 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
-use crate::writer::BackupWriterBuilder;
+use crate::writer::{BackupSstWriterBuilder, BackupTextWriterBuilder, BackupWriterBuilder};
 use crate::Error;
 use crate::*;
 
@@ -54,9 +54,11 @@ struct Request {
     backend: StorageBackend,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
+    is_text_format: bool,
     cf: CfName,
     compression_type: CompressionType,
     compression_level: i32,
+    table_info: Vec<u8>,
 }
 
 /// Backup Task.
@@ -117,9 +119,11 @@ impl Task {
                 limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
+                is_text_format: req.get_is_text_format(),
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
+                table_info: req.get_table_info().to_owned(),
             },
             resp,
         };
@@ -144,9 +148,9 @@ pub struct BackupRange {
 
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
-    fn backup<E: Engine>(
+    fn backup<E: Engine, B: BackupWriterBuilder>(
         &self,
-        writer_builder: BackupWriterBuilder,
+        writer_builder: B,
         engine: &E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
@@ -709,16 +713,16 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
-                        let writer_builder = BackupWriterBuilder::new(
-                            store_id,
-                            storage.limiter.clone(),
-                            brange.region.clone(),
-                            db.clone(),
-                            ct,
-                            request.compression_level,
-                            sst_max_size,
-                        );
-                        (
+                        let res = if request.is_text_format {
+                            let writer_builder = BackupSstWriterBuilder::new(
+                                store_id,
+                                storage.limiter.clone(),
+                                brange.region.clone(),
+                                db.clone(),
+                                ct,
+                                request.compression_level,
+                                sst_max_size,
+                            );
                             brange.backup(
                                 writer_builder,
                                 &engine,
@@ -726,7 +730,26 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 backup_ts,
                                 start_ts,
                                 &storage,
-                            ),
+                            )
+                        } else {
+                            let writer_builder = BackupTextWriterBuilder::new(
+                                store_id,
+                                storage.limiter.clone(),
+                                brange.region.clone(),
+                                sst_max_size,
+                                &request.table_info,
+                            );
+                            brange.backup(
+                                writer_builder,
+                                &engine,
+                                concurrency_manager.clone(),
+                                backup_ts,
+                                start_ts,
+                                &storage,
+                            )
+                        };
+                        (
+                            res,
                             brange
                                 .start_key
                                 .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
@@ -1147,6 +1170,8 @@ pub mod tests {
                         cf: engine_traits::CF_DEFAULT,
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
+                        is_text_format: false,
+                        table_info: vec![],
                     },
                     resp: tx,
                 };

@@ -55,6 +55,16 @@ pub enum Datum {
 }
 
 impl Datum {
+    // pub fn into_string(self) -> String {
+    //     unimplemented!()
+    // }
+
+    pub fn from_string(src: &str) -> Datum {
+        unimplemented!()
+    }
+}
+
+impl Datum {
     #[inline]
     pub fn as_int(&self) -> Result<Option<i64>> {
         match *self {
