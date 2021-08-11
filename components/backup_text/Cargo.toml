@@ -5,8 +5,20 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+    "tipb/protobuf-codec",
+    "tidb_query_datatype/protobuf-codec",
+    "tikv_util/protobuf-codec",
+]
+
 [dependencies]
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.66"
+collections = { path = "../collections/" }

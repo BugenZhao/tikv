@@ -40,7 +40,8 @@ impl TextWriter {
             CF_DEFAULT => kv_to_text(key, val, &self.table_info),
             CF_WRITE => unimplemented!(),
             _ => unreachable!(),
-        };
+        }
+        .unwrap();
         s.push('\n');
         self.file_size += self.file_writer.write(s.as_bytes())?;
         Ok(())
