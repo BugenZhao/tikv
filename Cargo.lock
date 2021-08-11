@@ -255,11 +255,13 @@ dependencies = [
 name = "backup_text"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "engine_rocks",
  "engine_traits",
  "serde",
  "serde_json",
  "tidb_query_datatype",
+ "tikv_util",
  "tipb",
 ]
 

@@ -1,10 +1,14 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::collections::HashMap;
+
 use crate::hr_datum::{HrBytes, HrDatum};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrKv {
-    key: HrBytes,
-    value: Vec<HrDatum>,
+    pub key: HrBytes,
+    pub value: HashMap<i64, HrDatum>,
 }
 
 impl HrKv {

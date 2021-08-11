@@ -1,4 +1,6 @@
-use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use tidb_query_datatype::codec::data_type::{Duration, Enum};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
 
@@ -78,7 +80,7 @@ impl From<Datum> for HrDatum {
             Datum::U64(v) => Self::U64(v),
             Datum::F64(v) => Self::F64(v),
             Datum::Dur(d) => Self::Dur(HrDuration {
-                value: d.to_numeric_string(),
+                value: d.to_string(),
                 fsp: d.fsp(),
             }),
             Datum::Bytes(v) => Self::Bytes(HrBytes::from(v)),
