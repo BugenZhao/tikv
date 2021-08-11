@@ -110,7 +110,7 @@ impl<LW: LocalWriter> Writer<LW> {
 
     fn save_and_build_file(
         self,
-        name: &str,
+        file_name: &str,
         cf: &'static str,
         limiter: Limiter,
         storage: &dyn ExternalStorage,
@@ -119,7 +119,6 @@ impl<LW: LocalWriter> Writer<LW> {
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
             .observe(file_size as f64);
-        let file_name = format!("{}_{}.sst", name, cf);
 
         let (reader, hasher) = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
@@ -136,7 +135,7 @@ impl<LW: LocalWriter> Writer<LW> {
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
 
         let mut file = File::default();
-        file.set_name(file_name);
+        file.set_name(file_name.to_owned());
         file.set_sha256(sha256);
         file.set_crc64xor(self.checksum);
         file.set_total_kvs(self.total_kvs);
@@ -214,6 +213,7 @@ impl BackupWriterBuilder for BackupSstWriterBuilder {
             default,
             write,
             self.sst_max_size,
+            FileFormat::SST,
         )
     }
 }
@@ -253,8 +253,8 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key);
         let (default, write) = (
-            TextWriter::new(self.table_info.clone(), CF_DEFAULT),
-            TextWriter::new(self.table_info.clone(), CF_WRITE),
+            TextWriter::new(self.table_info.clone(), CF_DEFAULT, &name)?,
+            TextWriter::new(self.table_info.clone(), CF_WRITE, &name)?,
         );
         BackupWriter::<TextWriter>::new(
             &name,
@@ -262,7 +262,22 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
             default,
             write,
             self.sst_max_size,
+            FileFormat::Text,
         )
+    }
+}
+
+pub enum FileFormat {
+    SST,
+    Text,
+}
+
+impl FileFormat {
+    fn suffix(&self) -> &'static str {
+        match self {
+            SST => "sst",
+            Text => "txt",
+        }
     }
 }
 
@@ -273,6 +288,7 @@ pub struct BackupWriter<LW: LocalWriter> {
     write: Writer<LW>,
     limiter: Limiter,
     sst_max_size: u64,
+    format: FileFormat,
 }
 
 impl<LW: LocalWriter> BackupWriter<LW> {
@@ -283,6 +299,7 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         default: LW,
         write: LW,
         sst_max_size: u64,
+        format: FileFormat,
     ) -> Result<BackupWriter<LW>> {
         let name = name.to_owned();
         Ok(BackupWriter {
@@ -291,11 +308,23 @@ impl<LW: LocalWriter> BackupWriter<LW> {
             write: Writer::new(write),
             limiter,
             sst_max_size,
+            format,
         })
     }
 
-    /// Write entries to buffered SST files.
+    /// Write entries to buffered files.
     pub fn write<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
+    where
+        I: Iterator<Item = TxnEntry>,
+    {
+        match self.format {
+            FileFormat::SST => self.write_sst(entries, need_checksum),
+            FileFormat::Text => self.write_text(entries, need_checksum),
+        }
+    }
+
+    /// Write entries to buffered SST files.
+    pub fn write_sst<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
@@ -324,6 +353,8 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         Ok(())
     }
 
+    /// Write entries to buffered Text files, the short value in `write_cf` will
+    /// move to the `default_cf`
     pub fn write_text<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
@@ -368,8 +399,9 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         let write_written = !self.write.is_empty() || !self.default.is_empty();
         if !self.default.is_empty() {
             // Save default cf contents.
+            let file_name = format!("{}_{}.{}", self.name, CF_DEFAULT, self.format.suffix());
             let default = self.default.save_and_build_file(
-                &self.name,
+                &file_name,
                 CF_DEFAULT,
                 self.limiter.clone(),
                 storage,
@@ -378,8 +410,9 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         }
         if write_written {
             // Save write cf contents.
+            let file_name = format!("{}_{}.{}", self.name, CF_WRITE, self.format.suffix());
             let write = self.write.save_and_build_file(
-                &self.name,
+                &file_name,
                 CF_WRITE,
                 self.limiter.clone(),
                 storage,
@@ -460,8 +493,9 @@ impl BackupRawKVWriter {
         let start = Instant::now();
         let mut files = Vec::with_capacity(1);
         if !self.writer.is_empty() {
+            let file_name = format!("{}_{}.sst", self.name, self.cf);
             let file = self.writer.save_and_build_file(
-                &self.name,
+                &file_name,
                 self.cf,
                 self.limiter.clone(),
                 storage,

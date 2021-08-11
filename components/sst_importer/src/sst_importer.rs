@@ -493,8 +493,7 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        let mut text_reader = TextReader::new(table_info, meta.get_cf_name());
-        assert!(text_reader.verify_checksum());
+        let mut text_reader = TextReader::new(path_str, table_info, meta.get_cf_name())?;
 
         debug!(
             "downloaded file and verified";
