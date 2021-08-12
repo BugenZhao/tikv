@@ -491,18 +491,6 @@ impl SSTImporter {
             url
         };
 
-        // now validate the SST file.
-        let path_str = path.temp.to_str().unwrap();
-        let mut text_reader = TextReader::new(path_str, table_info, meta.get_cf_name())?;
-
-        debug!(
-            "downloaded file and verified";
-            "meta" => ?meta,
-            "url" => %url,
-            "name" => name,
-            "path" => path_str,
-        );
-
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
@@ -536,11 +524,27 @@ impl SSTImporter {
         let new_prefix_data_key_len = key.len();
         let mut first_key = None;
 
-        match range_start {
-            Bound::Unbounded => text_reader.seek(SeekKey::Start),
-            Bound::Included(s) => text_reader.seek(SeekKey::Key(&keys::data_key(&s))),
+        // now validate the SST file.
+        let path_str = path.temp.to_str().unwrap();
+        let mut text_reader = match range_start {
+            Bound::Unbounded => TextReader::new(path_str, table_info, meta.get_cf_name())?,
+            Bound::Included(s) => TextReader::new_start_at(
+                path_str,
+                table_info,
+                meta.get_cf_name(),
+                SeekKey::Key(&keys::data_key(&s)),
+            )?,
             Bound::Excluded(_) => unreachable!(),
         };
+
+        debug!(
+            "downloaded file and verified";
+            "meta" => ?meta,
+            "url" => %url,
+            "name" => name,
+            "path" => path_str,
+        );
+
         // SST writer must not be opened in gRPC threads, because it may be
         // blocked for a long time due to IO, especially, when encryption at rest
         // is enabled, and it leads to gRPC keepalive timeout.

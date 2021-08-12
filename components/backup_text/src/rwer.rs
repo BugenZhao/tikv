@@ -54,6 +54,7 @@ impl TextWriter {
 
 pub struct TextReader {
     lines_reader: Lines<BufReader<File>>,
+    next_kv: Option<(Vec<u8>, Vec<u8>)>,
     table_info: TableInfo,
     cf: String,
 }
@@ -63,12 +64,41 @@ impl TextReader {
         let lines_reader = BufReader::new(OpenOptions::new().read(true).open(path)?).lines();
         Ok(TextReader {
             lines_reader,
+            next_kv: None,
             table_info,
             cf: cf.to_owned(),
         })
     }
 
+    pub fn new_start_at(
+        path: &str,
+        table_info: TableInfo,
+        cf: &str,
+        seek_key: SeekKey,
+    ) -> io::Result<TextReader> {
+        let mut text_reader = TextReader::new(path, table_info, cf)?;
+        match seek_key {
+            SeekKey::Start => return Ok(text_reader),
+            SeekKey::Key(sk) => {
+                while let Some((k, v)) = text_reader.pop_kv()? {
+                    if k.as_slice() >= sk {
+                        text_reader.next_kv = Some((k, v));
+                        break;
+                    }
+                }
+                if text_reader.next_kv.is_none() {
+                    // reach end
+                }
+                return Ok(text_reader);
+            }
+            SeekKey::End => unreachable!(),
+        }
+    }
+
     pub fn pop_kv(&mut self) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+        if let Some(kv) = self.next_kv.take() {
+            return Ok(Some(kv));
+        }
         if let Some(l) = self.lines_reader.next() {
             let l = l?;
             let res = match self.cf.as_str() {
@@ -79,9 +109,5 @@ impl TextReader {
             return Ok(Some(res));
         }
         Ok(None)
-    }
-
-    pub fn seek(&mut self, seek_key: SeekKey) {
-        unimplemented!()
     }
 }
