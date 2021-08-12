@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::sst_to_text::{kv_to_text, text_to_kv};
+use crate::sst_to_text::{kv_to_text, kv_to_write, text_to_kv, write_to_kv};
 use engine_traits::{CfName, SeekKey, CF_DEFAULT, CF_WRITE};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Lines, Write};
@@ -37,11 +37,10 @@ impl TextWriter {
 
     pub fn put_line(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
         let mut s = match self.cf {
-            CF_DEFAULT => kv_to_text(key, val, &self.table_info),
-            CF_WRITE => unimplemented!(),
+            CF_DEFAULT => kv_to_text(key, val, &self.table_info).unwrap(),
+            CF_WRITE => kv_to_write(key, val),
             _ => unreachable!(),
-        }
-        .unwrap();
+        };
         s.push('\n');
         self.file_size += self.file_writer.write(s.as_bytes())?;
         Ok(())
@@ -72,11 +71,12 @@ impl TextReader {
     pub fn pop_kv(&mut self) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
         if let Some(l) = self.lines_reader.next() {
             let l = l?;
-            match self.cf.as_str() {
-                CF_DEFAULT => return Ok(Some(text_to_kv(l.as_str(), &self.table_info))),
-                CF_WRITE => unimplemented!(),
+            let res = match self.cf.as_str() {
+                CF_DEFAULT => text_to_kv(l.as_str(), &self.table_info),
+                CF_WRITE => write_to_kv(l.as_str()),
                 _ => unreachable!(),
-            }
+            };
+            return Ok(Some(res));
         }
         Ok(None)
     }

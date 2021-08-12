@@ -7,10 +7,12 @@ use tidb_query_datatype::{
     expr::EvalContext,
 };
 use tipb::{ColumnInfo, TableInfo};
+use txn_types::WriteRef;
 
 use crate::{
     hr_datum::{HrBytes, HrDatum},
     hr_kv::HrKv,
+    hr_write::{HrKvWrite, HrWrite},
 };
 
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
@@ -80,6 +82,20 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
     let key = kv.key.into();
 
     (key, value)
+}
+
+pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
+    let hr_write = HrKvWrite {
+        key: HrBytes::from(key.to_vec()),
+        value: HrWrite::from(WriteRef::parse(val).unwrap()),
+    };
+    hr_write.to_text()
+}
+
+pub fn write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
+    let HrKvWrite { key, value } = HrKvWrite::from_text(line).into();
+    let value: WriteRef<'_> = value.into();
+    (key.into(), value.to_bytes())
 }
 
 #[cfg(test)]

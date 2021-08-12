@@ -2,5 +2,6 @@
 
 mod hr_datum;
 mod hr_kv;
+mod hr_write;
 pub mod rwer;
 pub mod sst_to_text;

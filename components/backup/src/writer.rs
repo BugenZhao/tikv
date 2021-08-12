@@ -275,8 +275,8 @@ pub enum FileFormat {
 impl FileFormat {
     fn suffix(&self) -> &'static str {
         match self {
-            SST => "sst",
-            Text => "txt",
+            FileFormat::SST => "sst",
+            FileFormat::Text => "txt",
         }
     }
 }
