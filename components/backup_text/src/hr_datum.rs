@@ -16,7 +16,7 @@ pub struct HrDuration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HrBytes {
     Utf8(String),
-    Bytes(Vec<u8>),
+    Raw(Vec<u8>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ impl From<Vec<u8>> for HrBytes {
     fn from(bytes: Vec<u8>) -> Self {
         String::from_utf8(bytes)
             .map(HrBytes::Utf8)
-            .unwrap_or_else(|e| HrBytes::Bytes(e.into_bytes()))
+            .unwrap_or_else(|e| HrBytes::Raw(e.into_bytes()))
     }
 }
 
@@ -49,7 +49,7 @@ impl Into<Vec<u8>> for HrBytes {
     fn into(self) -> Vec<u8> {
         match self {
             HrBytes::Utf8(s) => s.into_bytes(),
-            HrBytes::Bytes(b) => b,
+            HrBytes::Raw(b) => b,
         }
     }
 }
@@ -139,11 +139,45 @@ mod tests {
 
     #[test]
     fn test_it_works() {
-        let datums = [Datum::Bytes(b"hello".to_vec())];
+        let ctx = &mut EvalContext::default();
+
+        let datums = [
+            // bytes
+            Datum::Bytes(b"hello".to_vec()),
+            Datum::Bytes("你好".as_bytes().to_vec()),
+            Datum::Bytes(b"\xf0\x28\x8c\x28".to_vec()),
+            // decimal
+            Datum::Dec("12345678987.654321".parse().unwrap()),
+            Datum::Dec("123.0".parse().unwrap()),
+            Datum::Dec("123".parse().unwrap()),
+            // duration
+            Datum::Dur(Duration::parse(ctx, "1 23:34:45.6789", 4).unwrap()),
+            Datum::Dur(Duration::parse(ctx, "1 23:34:45", 0).unwrap()),
+            // enum
+            Datum::Enum(Enum::new(b"Foo".to_vec(), 1)),
+            // numbers
+            Datum::F64(3.1415926),
+            Datum::I64(31415926535898),
+            Datum::U64(31415926535898),
+            // json
+            Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
+            Datum::Json(r#"["foo", "bar"]"#.parse().unwrap()),
+            // primitive
+            Datum::Max,
+            Datum::Min,
+            Datum::Null,
+            // set
+            // Datum::Set(todo!()),
+            // time
+            Datum::Time(Time::parse_datetime(ctx, "2021-08-12 12:34:56.789", 3, false).unwrap()),
+            Datum::Time(Time::parse_date(ctx, "2021-08-12").unwrap()),
+        ];
+
         for datum in datums {
             let enc = HrDatum::from(datum.clone()).to_text();
             println!("{}", enc);
             let dec: Datum = HrDatum::from_text(enc).into();
+            dbg!(&datum, &dec);
             assert_eq!(datum, dec);
         }
     }

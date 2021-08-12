@@ -33,6 +33,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
             for (col_id, ci) in column_id_info {
                 let datum = if let Some((start, offset)) = row.search_in_non_null_ids(col_id)? {
                     let data = &row.values()[start..offset];
+                    // encode with V1CompatibleEncoder and decode as v1 datum
                     let mut buf = vec![];
                     buf.write_v2_as_datum(data, &ci).unwrap();
                     (&mut buf.as_slice()).read_datum()?
@@ -104,11 +105,11 @@ mod tests {
 
     use tidb_query_datatype::{
         codec::{
-            data_type::{Decimal, Duration, Json},
+            data_type::{DateTime, Decimal, Duration, Json},
             row::v2::{self, encoder_for_test::Column as V2Column},
             table::{decode_row, encode_row},
         },
-        FieldTypeAccessor, FieldTypeTp,
+        FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     };
 
     use tikv_util::map;
@@ -122,32 +123,56 @@ mod tests {
         Vec<V2Column>,
         TableInfo,
     ) {
-        let mut duration_col = ColumnInfo::default();
-        duration_col
-            .as_mut_accessor()
-            .set_tp(FieldTypeTp::Duration)
-            .set_decimal(2);
+        let duration_col = {
+            let mut col = ColumnInfo::default();
+            col.as_mut_accessor()
+                .set_tp(FieldTypeTp::Duration)
+                .set_decimal(2);
+            col
+        };
+
+        let small_unsigned_col = {
+            let mut col = ColumnInfo::default();
+            col.as_mut_accessor()
+                .set_tp(FieldTypeTp::Short)
+                .set_flag(FieldTypeFlag::UNSIGNED);
+            col
+        };
 
         let cols = map![
             1 => FieldTypeTp::LongLong.into(),
             2 => FieldTypeTp::VarChar.into(),
             3 => FieldTypeTp::NewDecimal.into(),
             5 => FieldTypeTp::JSON.into(),
-            6 => duration_col
+            6 => duration_col,
+            7 => small_unsigned_col,
+            8 => FieldTypeTp::DateTime.into()
         ];
 
+        let small_int = || 42;
         let int = || 123_456_789_233_666;
         let bytes = || b"abc".to_vec();
         let dec = || Decimal::from_str("233.345678").unwrap();
         let json = || Json::from_str(r#"{"name": "John"}"#).unwrap();
         let dur = || Duration::parse(&mut EvalContext::default(), "23:23:23.666", 2).unwrap();
+        let time = || {
+            DateTime::parse_datetime(
+                &mut EvalContext::default(),
+                "2021-08-12 12:34:56.789",
+                3,
+                false,
+            )
+            .unwrap()
+        };
 
         let row = map![
             1 => Datum::I64(int()),
             2 => Datum::Bytes(bytes()),
             3 => Datum::Dec(dec()),
             5 => Datum::Json(json()),
-            6 => Datum::Dur(dur())
+            6 => Datum::Dur(dur()),
+            7 => Datum::U64(small_int()),
+            8 => Datum::Time(time())
         ];
 
         let cols_v2 = vec![
@@ -158,6 +183,8 @@ mod tests {
             V2Column::new(6, dur())
                 .with_tp(FieldTypeTp::Duration)
                 .with_decimal(2),
+            V2Column::new(7, small_int() as i64).with_unsigned(),
+            V2Column::new(8, time()).with_tp(FieldTypeTp::DateTime),
         ];
 
         let table_info = {
@@ -193,6 +220,7 @@ mod tests {
         let (dec_key, dec_val) = text_to_kv(&text, &table_info);
         let dec_row =
             decode_row(&mut dec_val.as_slice(), &mut EvalContext::default(), &cols).unwrap();
+        println!("{:?}", dec_row);
 
         assert_eq!(dec_key, key);
         assert_eq!(dec_row, row);
@@ -221,6 +249,7 @@ mod tests {
             &cols_v1,
         )
         .unwrap();
+        println!("{:?}", dec_row);
 
         assert_eq!(dec_key, key);
         assert_eq!(dec_row, row);
