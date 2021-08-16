@@ -150,7 +150,6 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         is_text_format: bool,
-        table_info_data: Vec<u8>,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
@@ -165,6 +164,7 @@ impl SSTImporter {
         let res = if !is_text_format {
             self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, engine)
         } else {
+            let table_info_data = rewrite_rule.get_table_info().to_owned();
             let mut table_info = TableInfo::default();
             table_info.merge_from_bytes(&table_info_data).unwrap();
             self.do_download_text::<E>(
