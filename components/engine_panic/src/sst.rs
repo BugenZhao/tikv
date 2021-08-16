@@ -85,7 +85,7 @@ impl SstWriter for PanicSstWriter {
     fn finish(self) -> Result<Self::ExternalSstFileInfo> {
         panic!()
     }
-    fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
+    fn finish_read(&mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
         panic!()
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::sst_to_text::{kv_to_text, kv_to_write, text_to_kv, write_to_kv};
 use engine_traits::{CfName, SeekKey, CF_DEFAULT, CF_WRITE};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Lines, Write};
 use tikv_util::error;
 use tipb::TableInfo;
@@ -55,9 +55,14 @@ impl TextWriter {
         Ok(())
     }
 
-    pub fn finish(mut self) -> io::Result<File> {
-        self.file_writer.flush()?;
-        Ok(OpenOptions::new().read(true).open(&self.name)?)
+    pub fn reader(&self) -> io::Result<BufReader<File>> {
+        Ok(BufReader::new(
+            OpenOptions::new().read(true).open(&self.name)?,
+        ))
+    }
+
+    pub fn cleanup(self) -> io::Result<()> {
+        Ok(fs::remove_file(&self.name)?)
     }
 }
 
