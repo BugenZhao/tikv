@@ -260,6 +260,8 @@ dependencies = [
  "engine_traits",
  "serde",
  "serde_json",
+ "slog",
+ "slog-global",
  "tidb_query_datatype",
  "tikv_util",
  "tipb",

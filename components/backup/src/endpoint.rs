@@ -80,6 +80,7 @@ impl fmt::Debug for Task {
             )
             .field("end_key", &log_wrappers::Value::key(&self.request.end_key))
             .field("is_raw_kv", &self.request.is_raw_kv)
+            .field("is_text_format", &self.request.is_text_format)
             .field("cf", &self.request.cf)
             .finish()
     }
@@ -713,7 +714,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
-                        let res = if request.is_text_format {
+                        let res = if !request.is_text_format {
                             let writer_builder = BackupSstWriterBuilder::new(
                                 store_id,
                                 storage.limiter.clone(),

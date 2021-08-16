@@ -50,12 +50,24 @@ impl LocalWriter for TextWriter {
     type LocalReader = BufReader<StdFile>;
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.put_line(key, val)?;
-        Ok(())
+        match self.put_line(key, val) {
+            Err(e) => {
+                error!("TextWriter write failed"; "err" => ?e);
+                Err(e.into())
+            }
+            Ok(()) => Ok(()),
+        }
     }
 
     fn finish_read(self) -> Result<(u64, Self::LocalReader)> {
-        Ok((self.get_size(), BufReader::new(self.finish()?)))
+        let size = self.get_size();
+        match self.finish() {
+            Err(e) => {
+                error!("TextWriter finish failed"; "err" => ?e);
+                Err(e.into())
+            }
+            Ok(f) => Ok((size, BufReader::new(f))),
+        }
     }
 }
 

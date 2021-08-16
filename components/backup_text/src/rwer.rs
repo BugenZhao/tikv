@@ -4,6 +4,7 @@ use crate::sst_to_text::{kv_to_text, kv_to_write, text_to_kv, write_to_kv};
 use engine_traits::{CfName, SeekKey, CF_DEFAULT, CF_WRITE};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Lines, Write};
+use tikv_util::error;
 use tipb::TableInfo;
 
 pub struct TextWriter {
@@ -16,11 +17,19 @@ pub struct TextWriter {
 
 impl TextWriter {
     pub fn new(table_info: TableInfo, cf: CfName, name: &str) -> io::Result<TextWriter> {
-        let file = OpenOptions::new()
+        let name = format!("{}_{}", name, cf);
+        let file = match OpenOptions::new()
             .write(true)
-            .append(true)
             .truncate(true)
-            .open(name)?;
+            .create_new(true)
+            .open(&name)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                error!("failed to open file"; "err" => ?e, "path" => name);
+                return Err(e);
+            }
+        };
         let file_writer = BufWriter::new(file);
         Ok(TextWriter {
             file_writer,
@@ -61,7 +70,13 @@ pub struct TextReader {
 
 impl TextReader {
     pub fn new(path: &str, table_info: TableInfo, cf: &str) -> io::Result<TextReader> {
-        let lines_reader = BufReader::new(OpenOptions::new().read(true).open(path)?).lines();
+        let lines_reader = match OpenOptions::new().read(true).open(path) {
+            Ok(f) => BufReader::new(f).lines(),
+            Err(e) => {
+                error!("failed to open file"; "err" => ?e, "path" => path);
+                return Err(e);
+            }
+        };
         Ok(TextReader {
             lines_reader,
             next_kv: None,
@@ -100,7 +115,13 @@ impl TextReader {
             return Ok(Some(kv));
         }
         if let Some(l) = self.lines_reader.next() {
-            let l = l?;
+            let l = match l {
+                Err(e) => {
+                    error!("TextReader pop_kv met error"; "err" => ?e);
+                    return Err(e);
+                }
+                Ok(l) => l,
+            };
             let res = match self.cf.as_str() {
                 CF_DEFAULT => text_to_kv(l.as_str(), &self.table_info),
                 CF_WRITE => write_to_kv(l.as_str()),
