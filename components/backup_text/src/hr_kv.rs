@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrKv {
+    #[serde(rename = "k")]
     pub key: HrBytes,
+    #[serde(rename = "v")]
     pub value: HashMap<i64, HrDatum>,
 }
 

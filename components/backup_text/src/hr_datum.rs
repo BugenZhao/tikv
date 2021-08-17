@@ -9,11 +9,14 @@ use tidb_query_datatype::expr::EvalContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrDuration {
+    #[serde(rename = "v")]
     value: String,
+    #[serde(rename = "f")]
     fsp: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum HrBytes {
     Utf8(String),
     Raw(Vec<u8>),
@@ -21,19 +24,25 @@ pub enum HrBytes {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrTime {
+    #[serde(rename = "v")]
     value: String,
+    #[serde(rename = "r")]
     raw: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrEnum {
+    #[serde(rename = "n")]
     name: HrBytes,
+    #[serde(rename = "v")]
     value: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrSet {
+    #[serde(rename = "d")]
     data: Vec<HrBytes>,
+    #[serde(rename = "v")]
     value: u64,
 }
 
@@ -57,18 +66,31 @@ impl Into<Vec<u8>> for HrBytes {
 /// A human-readable `Datum`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HrDatum {
+    #[serde(rename = "n")]
     Null,
+    #[serde(rename = "i")]
     I64(i64),
+    #[serde(rename = "u")]
     U64(u64),
+    #[serde(rename = "f")]
     F64(f64),
+    #[serde(rename = "D")]
     Dur(HrDuration),
+    #[serde(rename = "b")]
     Bytes(HrBytes),
+    #[serde(rename = "d")]
     Dec(String),
+    #[serde(rename = "t")]
     Time(HrTime),
+    #[serde(rename = "j")]
     Json(String),
+    #[serde(rename = "e")]
     Enum(HrEnum),
+    #[serde(rename = "s")]
     Set(HrSet),
+    #[serde(rename = "m")]
     Min,
+    #[serde(rename = "M")]
     Max,
 }
 
