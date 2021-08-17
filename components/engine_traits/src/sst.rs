@@ -46,7 +46,7 @@ pub trait SstWriter: Send {
     fn finish(self) -> Result<Self::ExternalSstFileInfo>;
 
     /// Finalize writing to sst file and read the contents into the buffer.
-    fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
+    fn finish_read(&mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
 // compression type used for write sst file

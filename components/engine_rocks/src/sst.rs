@@ -272,7 +272,7 @@ impl SstWriter for RocksSstWriter {
         Ok(RocksExternalSstFileInfo(self.writer.finish()?))
     }
 
-    fn finish_read(mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
+    fn finish_read(&mut self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)> {
         let env = self.env.take().ok_or_else(|| {
             Error::Engine("failed to read sequential file no env provided".to_owned())
         })?;

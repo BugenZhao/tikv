@@ -30,7 +30,8 @@ use crate::{backup_file_name, Error, Result};
 pub trait LocalWriter {
     type LocalReader: Read + Send + 'static;
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
-    fn finish_read(self) -> Result<(u64, Self::LocalReader)>;
+    fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)>;
+    fn cleanup(self) -> Result<()>;
 }
 
 impl LocalWriter for RocksSstWriter {
@@ -40,9 +41,12 @@ impl LocalWriter for RocksSstWriter {
         <RocksSstWriter as SstWriter>::put(self, key, val)?;
         Ok(())
     }
-    fn finish_read(self) -> Result<(u64, Self::LocalReader)> {
+    fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)> {
         let (sst_info, r) = <RocksSstWriter as SstWriter>::finish_read(self)?;
         Ok((sst_info.file_size(), r))
+    }
+    fn cleanup(self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -59,15 +63,19 @@ impl LocalWriter for TextWriter {
         }
     }
 
-    fn finish_read(self) -> Result<(u64, Self::LocalReader)> {
+    fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)> {
         let size = self.get_size();
-        match self.finish() {
+        match self.finish_read() {
             Err(e) => {
-                error!("TextWriter finish failed"; "err" => ?e);
+                error!("TextWriter get reader failed"; "err" => ?e);
                 Err(e.into())
             }
-            Ok(f) => Ok((size, BufReader::new(f))),
+            Ok(r) => Ok((size, r)),
         }
+    }
+
+    fn cleanup(self) -> Result<()> {
+        Ok(self.cleanup()?)
     }
 }
 
@@ -121,7 +129,7 @@ impl<LW: LocalWriter> Writer<LW> {
     }
 
     fn save_and_build_file(
-        self,
+        mut self,
         file_name: &str,
         cf: &'static str,
         limiter: Limiter,
@@ -139,6 +147,7 @@ impl<LW: LocalWriter> Writer<LW> {
             Box::new(limiter.limit(AllowStdIo::new(reader))),
             file_size,
         )?;
+        self.writer.cleanup()?;
         let sha256 = hasher
             .lock()
             .unwrap()
