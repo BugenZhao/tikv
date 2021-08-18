@@ -6,7 +6,9 @@ use txn_types::{TimeStamp, WriteRef, WriteType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrKvWrite {
+    #[serde(rename = "k")]
     pub key: HrBytes,
+    #[serde(rename = "v")]
     pub value: HrWrite,
 }
 
@@ -22,17 +24,25 @@ impl HrKvWrite {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrWrite {
+    #[serde(rename = "t")]
     pub write_type: HrWriteType,
+    #[serde(rename = "s")]
     pub start_ts: u64,
+    #[serde(rename = "o")]
     pub has_overlapped_rollback: bool,
+    #[serde(rename = "f")]
     pub gc_fence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HrWriteType {
+    #[serde(rename = "p")]
     Put,
+    #[serde(rename = "d")]
     Delete,
+    #[serde(rename = "l")]
     Lock,
+    #[serde(rename = "r")]
     Rollback,
 }
 
