@@ -10,7 +10,8 @@ use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
 use crate::{
-    hr_datum::{HrBytes, HrDatum},
+    hr_datum::HrDatum,
+    hr_key::HrDataKey,
     hr_kv::HrKv,
     hr_write::{HrKvWrite, HrWrite},
 };
@@ -60,8 +61,10 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         None => Default::default(),
     };
 
+    let key = HrDataKey::from_encoded(key);
+
     Ok(HrKv {
-        key: HrBytes::from(key.to_vec()),
+        key,
         value: hr_datums,
     }
     .to_text())
@@ -80,14 +83,14 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
 
     // always encode in v1 format
     let value = table::encode_row(&mut EvalContext::default(), row, &col_ids).unwrap();
-    let key = kv.key.into();
+    let key = kv.key.into_encoded();
 
     (key, value)
 }
 
 pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
     let hr_write = HrKvWrite {
-        key: HrBytes::from(key.to_vec()),
+        key: HrDataKey::from_encoded(&key),
         value: HrWrite::from(WriteRef::parse(val).unwrap()),
     };
     hr_write.to_text()
@@ -96,7 +99,7 @@ pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
 pub fn write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKvWrite { key, value } = HrKvWrite::from_text(line).into();
     let value: WriteRef<'_> = value.into();
-    (key.into(), value.to_bytes())
+    (key.into_encoded(), value.to_bytes())
 }
 
 #[cfg(test)]
@@ -107,15 +110,24 @@ mod tests {
         codec::{
             data_type::{DateTime, Decimal, Duration, Json},
             row::v2::{self, encoder_for_test::Column as V2Column},
-            table::{decode_row, encode_row},
+            table::{decode_row, encode_row, encode_row_key},
         },
         FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     };
 
     use tikv_util::map;
+    use txn_types::Key;
 
     use super::*;
     use collections::HashMap;
+
+    fn key() -> Vec<u8> {
+        keys::data_key(
+            &Key::from_raw(&encode_row_key(233, 666))
+                .append_ts(123456789.into())
+                .into_encoded(),
+        )
+    }
 
     fn table() -> (
         HashMap<i64, ColumnInfo>,
@@ -211,10 +223,10 @@ mod tests {
         let col_ids = row.iter().map(|p| *p.0).collect::<Vec<_>>();
         let col_values = row.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
 
-        let key = b"dummy_key";
+        let key = key();
         let val = encode_row(&mut EvalContext::default(), col_values.clone(), &col_ids).unwrap();
 
-        let text = kv_to_text(key, &val, &table_info).unwrap();
+        let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
         let (dec_key, dec_val) = text_to_kv(&text, &table_info);
@@ -232,14 +244,14 @@ mod tests {
 
         let (cols_v1, row, cols_v2, table_info) = table();
 
-        let key = b"dummy_key";
+        let key = key();
         let val = {
             let mut buf = vec![];
             buf.write_row(&mut EvalContext::default(), cols_v2).unwrap();
             buf
         };
 
-        let text = kv_to_text(key, &val, &table_info).unwrap();
+        let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
         let (dec_key, dec_val) = text_to_kv(&text, &table_info);
@@ -254,4 +266,7 @@ mod tests {
         assert_eq!(dec_key, key);
         assert_eq!(dec_row, row);
     }
+
+    #[test]
+    fn test_index_key() {}
 }

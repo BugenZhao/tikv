@@ -2,13 +2,13 @@
 
 use std::collections::HashMap;
 
-use crate::hr_datum::{HrBytes, HrDatum};
+use crate::{hr_datum::HrDatum, hr_key::HrDataKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrKv {
     #[serde(rename = "k")]
-    pub key: HrBytes,
+    pub key: HrDataKey,
     #[serde(rename = "v")]
     pub value: HashMap<i64, HrDatum>,
 }

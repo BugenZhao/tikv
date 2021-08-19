@@ -258,6 +258,7 @@ dependencies = [
  "collections",
  "engine_rocks",
  "engine_traits",
+ "keys",
  "serde",
  "serde_json",
  "slog",
