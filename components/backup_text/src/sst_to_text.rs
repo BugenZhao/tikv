@@ -128,20 +128,19 @@ mod tests {
     use super::*;
     use collections::HashMap;
 
-    fn key() -> Vec<u8> {
-        keys::data_key(
-            &Key::from_raw(&encode_row_key(233, 666))
-                .append_ts(123456789.into())
-                .into_encoded(),
-        )
-    }
-
     fn table() -> (
+        Vec<u8>,
         HashMap<i64, ColumnInfo>,
         HashMap<i64, Datum>,
         Vec<V2Column>,
         TableInfo,
     ) {
+        let key = keys::data_key(
+            &Key::from_raw(&encode_row_key(233, 666))
+                .append_ts(123456789.into())
+                .into_encoded(),
+        );
+
         let duration_col = {
             let mut col = ColumnInfo::default();
             col.as_mut_accessor()
@@ -158,7 +157,7 @@ mod tests {
             col
         };
 
-        let cols = map![
+        let cols_v1 = map![
             1 => FieldTypeTp::LongLong.into(),
             2 => FieldTypeTp::VarChar.into(),
             3 => FieldTypeTp::NewDecimal.into(),
@@ -210,7 +209,8 @@ mod tests {
             let mut info = TableInfo::new();
             info.set_table_id(233);
             info.set_columns(
-                cols.clone()
+                cols_v1
+                    .clone()
                     .into_iter()
                     .map(|(id, mut ci)| {
                         ci.set_column_id(id);
@@ -221,37 +221,40 @@ mod tests {
             info
         };
 
-        (cols, row, cols_v2, table_info)
+        (key, cols_v1, row, cols_v2, table_info)
     }
 
     #[test]
     fn test_v1() {
-        let (cols, row, _, table_info) = table();
+        let (key, cols_v1, row, _, table_info) = table();
         let col_ids = row.iter().map(|p| *p.0).collect::<Vec<_>>();
         let col_values = row.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
 
-        let key = key();
         let val = encode_row(&mut EvalContext::default(), col_values.clone(), &col_ids).unwrap();
 
         let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
-        let (dec_key, dec_val) = text_to_kv(&text, &table_info);
-        let dec_row =
-            decode_row(&mut dec_val.as_slice(), &mut EvalContext::default(), &cols).unwrap();
-        println!("{:?}", dec_row);
+        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
+        let restored_row = decode_row(
+            &mut restored_val.as_slice(),
+            &mut EvalContext::default(),
+            &cols_v1,
+        )
+        .unwrap();
+        println!("{:?}", restored_row);
 
-        assert_eq!(dec_key, key);
-        assert_eq!(dec_row, row);
+        assert_eq!(restored_key, key);
+        assert_eq!(restored_val, val);
+        assert_eq!(restored_row, row);
     }
 
     #[test]
     fn test_v2() {
         use v2::encoder_for_test::RowEncoder;
 
-        let (cols_v1, row, cols_v2, table_info) = table();
+        let (key, _, _, cols_v2, table_info) = table();
 
-        let key = key();
         let val = {
             let mut buf = vec![];
             buf.write_row(&mut EvalContext::default(), cols_v2).unwrap();
@@ -261,16 +264,9 @@ mod tests {
         let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
-        let (dec_key, dec_val) = text_to_kv(&text, &table_info);
-        let dec_row = decode_row(
-            &mut dec_val.as_slice(),
-            &mut EvalContext::default(),
-            &cols_v1,
-        )
-        .unwrap();
-        println!("{:?}", dec_row);
+        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
 
-        assert_eq!(dec_key, key);
-        assert_eq!(dec_row, row);
+        assert_eq!(restored_key, key);
+        assert_eq!(restored_val, val);
     }
 }
