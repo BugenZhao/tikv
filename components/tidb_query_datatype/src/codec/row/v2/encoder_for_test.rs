@@ -22,7 +22,7 @@
 use crate::codec::{
     data_type::ScalarValue,
     mysql::{decimal::DecimalEncoder, json::JsonEncoder},
-    Error, Result,
+    Datum, Error, Result,
 };
 
 use crate::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
@@ -136,6 +136,34 @@ pub trait RowEncoder: NumberEncoder {
         Ok(())
     }
 
+    fn write_row_with_datum(
+        &mut self,
+        is_big: bool,
+        non_null_ids: Vec<u32>,
+        null_ids: Vec<u32>,
+        datums: Vec<Datum>,
+    ) -> Result<()> {
+        self.write_u8(super::CODEC_VERSION)?;
+        self.write_flag(is_big)?;
+        self.write_u16_le(non_null_ids.len() as u16)?;
+        self.write_u16_le(null_ids.len() as u16)?;
+        for id in non_null_ids {
+            self.write_id(is_big, id as i64)?;
+        }
+        for id in null_ids {
+            self.write_id(is_big, id as i64)?;
+        }
+        let mut offset_wtr = vec![];
+        let mut value_wtr = vec![];
+        for d in datums {
+            value_wtr.write_datum(&d)?;
+            offset_wtr.write_offset(is_big, value_wtr.len())?;
+        }
+        self.write_bytes(&offset_wtr)?;
+        self.write_bytes(&value_wtr)?;
+        Ok(())
+    }
+
     #[inline]
     fn write_flag(&mut self, is_big: bool) -> codec::Result<()> {
         let flag = if is_big {
@@ -214,6 +242,56 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     }
 }
 impl<T: BufferWriter> ScalarValueEncoder for T {}
+
+pub trait DatumValueEncoder: DecimalEncoder + JsonEncoder {
+    // Encode datum, which previously written by `write_v2_as_datum`, into v2 row format
+    #[inline]
+    fn write_datum(&mut self, datum: &Datum) -> Result<()> {
+        match datum {
+            Datum::I64(i) => self.encode_i64(*i).map_err(Error::from),
+            Datum::U64(u) => self.encode_u64(*u).map_err(Error::from),
+            Datum::F64(f) => self.write_f64(*f).map_err(Error::from),
+            Datum::Dur(d) => self.encode_i64(d.to_nanos()).map_err(Error::from),
+            Datum::Bytes(b) => self.write_bytes(&b).map_err(Error::from),
+            Datum::Dec(d) => {
+                let (prec, frac) = d.prec_and_frac();
+                self.write_decimal(&d, prec, frac)?;
+                Ok(())
+            }
+            Datum::Json(j) => self.write_json(j.as_ref()),
+            // `write_v2_as_datum` won't write these datum so it is okay to ignore them
+            Datum::Null
+            | Datum::Time(_)
+            | Datum::Enum(_)
+            | Datum::Set(_)
+            | Datum::Min
+            | Datum::Max => unreachable!(),
+        }
+    }
+
+    #[allow(clippy::match_overlapping_arm)]
+    #[inline]
+    fn encode_i64(&mut self, v: i64) -> codec::Result<()> {
+        match v {
+            MIN_I8..=MAX_I8 => self.write_u8(v as i8 as u8),
+            MIN_I16..=MAX_I16 => self.write_i16_le(v as i16),
+            MIN_I32..=MAX_I32 => self.write_i32_le(v as i32),
+            _ => self.write_i64_le(v),
+        }
+    }
+
+    #[allow(clippy::match_overlapping_arm)]
+    #[inline]
+    fn encode_u64(&mut self, v: u64) -> codec::Result<()> {
+        match v {
+            0..=MAX_U8 => self.write_u8(v as u8),
+            0..=MAX_U16 => self.write_u16_le(v as u16),
+            0..=MAX_U32 => self.write_u32_le(v as u32),
+            _ => self.write_u64_le(v),
+        }
+    }
+}
+impl<T: BufferWriter> DatumValueEncoder for T {}
 
 #[cfg(test)]
 mod tests {

@@ -349,6 +349,38 @@ pub fn decode_row(
     }
 }
 
+// Like `decode_row` but return `(Vec, Vec)`
+pub fn decode_row_vec(
+    data: &mut BytesSlice<'_>,
+    ctx: &mut EvalContext,
+    cols: &HashMap<i64, &'_ ColumnInfo>,
+) -> Result<(Vec<u32>, Vec<Datum>)> {
+    let mut values = datum::decode(data)?;
+    if values.get(0).map_or(true, |d| *d == Datum::Null) {
+        return Ok((vec![], vec![]));
+    }
+    if values.len() & 1 == 1 {
+        return Err(box_err!("decoded row values' length should be even!"));
+    }
+    let (mut ids, mut datums) = (
+        Vec::with_capacity(cols.len()),
+        Vec::with_capacity(cols.len()),
+    );
+    let mut drain = values.drain(..);
+    loop {
+        let id = match drain.next() {
+            None => return Ok((ids, datums)),
+            Some(id) => id.i64(),
+        };
+        let v = drain.next().unwrap();
+        if let Some(ci) = cols.get(&id) {
+            let v = unflatten(ctx, v, *ci)?;
+            ids.push(id as u32);
+            datums.push(v);
+        }
+    }
+}
+
 /// `RowColMeta` saves the column meta of the row.
 #[derive(Debug)]
 pub struct RowColMeta {

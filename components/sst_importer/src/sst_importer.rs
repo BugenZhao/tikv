@@ -1379,7 +1379,6 @@ mod tests {
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
                     false,
-                    vec![],
                     Limiter::new(INFINITY),
                     db,
                 )
@@ -1545,7 +1544,6 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             false,
-            vec![],
             Limiter::new(INFINITY),
             db,
         );
@@ -1572,7 +1570,6 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             false,
-            vec![],
             Limiter::new(INFINITY),
             db,
         );
@@ -1597,7 +1594,6 @@ mod tests {
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
             false,
-            vec![],
             Limiter::new(INFINITY),
             db,
         );
