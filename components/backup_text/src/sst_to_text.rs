@@ -266,7 +266,4 @@ mod tests {
         assert_eq!(dec_key, key);
         assert_eq!(dec_row, row);
     }
-
-    #[test]
-    fn test_index_key() {}
 }
