@@ -175,7 +175,8 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     key
 }
 
-pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
+/// `encode_row_key` encodes the table id and the encoded common handle into a byte array.
+pub fn encode_row_key_with_common_handle(table_id: i64, handle: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + handle.len());
     key.append_table_record_prefix(table_id).unwrap();
     key.extend(handle);
@@ -199,12 +200,27 @@ pub fn decode_int_handle(mut key: &[u8]) -> Result<i64> {
     key.read_i64().map_err(Error::from)
 }
 
-/// `decode_common_handle` decodes key key and gets the common handle.
+/// `decode_common_handle` decodes key and gets the common handle.
 #[inline]
 pub fn decode_common_handle(mut key: &[u8]) -> Result<&[u8]> {
     check_record_key(key)?;
     key = &key[PREFIX_LEN..];
     Ok(key)
+}
+
+/// `decode_common_handle_into_datums` decodes encoded common handle into a datum array.
+#[inline]
+pub fn decode_common_handle_into_datums(mut handle: &[u8]) -> Result<Vec<Datum>> {
+    datum::decode(&mut handle)
+}
+
+/// `encode_common_handle_from_datums` encodes datum array into a encoded common handle.
+#[inline]
+pub fn encode_common_handle_from_datums(
+    ctx: &mut EvalContext,
+    values: &[Datum],
+) -> Result<Vec<u8>> {
+    datum::encode_key(ctx, values)
 }
 
 /// `encode_index_seek_key` encodes an index value to byte array.

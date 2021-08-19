@@ -1,14 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::codec::table::*;
+use tidb_query_datatype::{codec::table::*, expr::EvalContext};
 use txn_types::{Key, TimeStamp};
+
+use crate::hr_datum::HrDatum;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HrHandle {
-    Common(Vec<u8>), // todo: human readable common handle
+    Common(Vec<HrDatum>),
     Int(i64),
+}
+
+impl HrHandle {
+    pub fn from_encoded_common_handle(handle: &[u8]) -> Self {
+        let datums = decode_common_handle_into_datums(handle)
+            .unwrap()
+            .into_iter()
+            .map(HrDatum::from)
+            .collect();
+        Self::Common(datums)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +50,7 @@ impl HrDataKey {
         let table_id = decode_table_id(&raw_key).unwrap();
         let handle = decode_int_handle(&raw_key)
             .map(HrHandle::Int)
-            .or_else(|_| decode_common_handle(&raw_key).map(|h| HrHandle::Common(h.to_vec())))
+            .or_else(|_| decode_common_handle(&raw_key).map(HrHandle::from_encoded_common_handle))
             .unwrap();
 
         Self {
@@ -54,7 +67,12 @@ impl HrDataKey {
             handle,
         } = self;
         let raw_key = match handle {
-            HrHandle::Common(h) => encode_common_handle_for_test(table_id, &h),
+            HrHandle::Common(datums) => {
+                let datums = datums.into_iter().map(HrDatum::into).collect::<Vec<_>>();
+                let handle =
+                    encode_common_handle_from_datums(&mut EvalContext::default(), &datums).unwrap();
+                encode_row_key_with_common_handle(table_id, &handle)
+            }
             HrHandle::Int(h) => encode_row_key(table_id, h),
         };
         let mut key = Key::from_raw(&raw_key);
@@ -69,6 +87,8 @@ impl HrDataKey {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::codec::Datum;
+
     use super::*;
 
     #[test]
@@ -89,6 +109,34 @@ mod tests {
         let encoded_key = vec![
             122, 116, 128, 0, 0, 0, 0, 0, 0, 255, 59, 95, 114, 128, 0, 0, 0, 0, 255, 0, 0, 10, 0,
             0, 0, 0, 0, 250, 250, 18, 182, 126, 208, 151, 255, 254,
+        ];
+
+        let hr = HrDataKey::from_encoded(&encoded_key);
+        println!("{}", serde_json::to_string(&hr).unwrap());
+        let restored_encoded_key = hr.into_encoded();
+        assert_eq!(encoded_key, restored_encoded_key);
+    }
+
+    #[test]
+    fn test_common_handle() {
+        let datums = vec![Datum::Dec(1.into()), Datum::Bytes(b"hello".to_vec())];
+        let handle =
+            encode_common_handle_from_datums(&mut EvalContext::default(), &datums).unwrap();
+        let hr_handle = HrHandle::from_encoded_common_handle(&handle);
+        let decoded_datums: Vec<Datum> = match hr_handle {
+            HrHandle::Common(datums) => datums.into_iter().map(HrDatum::into).collect(),
+            HrHandle::Int(_) => unreachable!(),
+        };
+        assert_eq!(datums, decoded_datums);
+    }
+
+    #[test]
+    fn test_key_with_common_handle() {
+        // decimal 1: [6, 1, 0, 129]
+        // todo: test with real key
+        let encoded_key = vec![
+            122, 116, 128, 0, 0, 0, 0, 0, 0, 255, 59, 95, 114, 6, 1, 0, 129, 0, 254, 250, 18, 182,
+            126, 208, 151, 255, 254,
         ];
 
         let hr = HrDataKey::from_encoded(&encoded_key);
