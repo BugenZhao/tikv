@@ -4,12 +4,12 @@ use crate::{
     from_text,
     hr_datum::HrDatum,
     hr_key::HrDataKey,
-    hr_kv::{CodecVersion, HrKv},
+    hr_kv::HrKv,
+    hr_value::{HrValue, RowV1, RowV2},
     hr_write::{HrKvWrite, HrWrite},
     to_text,
 };
 use datum::DatumDecoder;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tidb_query_datatype::codec::row::v2::{
     encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder,
@@ -21,20 +21,6 @@ use tidb_query_datatype::{
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RowV1 {
-    ids: Vec<u32>,
-    datums: Vec<HrDatum>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RowV2 {
-    is_big: bool,
-    non_null_ids: Vec<u32>,
-    null_ids: Vec<u32>,
-    datums: Vec<HrDatum>,
-}
-
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
     let columns_info = table.get_columns();
     let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
@@ -42,7 +28,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         .map(|ci| (ci.get_column_id(), ci))
         .collect();
 
-    let (value, version) = match val.get(0) {
+    let value = match val.get(0) {
         Some(&row::v2::CODEC_VERSION) => {
             let row = RowSlice::from_bytes(val)?;
             let mut non_null_ids = Vec::with_capacity(row.values_num());
@@ -64,7 +50,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 null_ids: row.null_ids(),
                 datums: hr_datums,
             };
-            (to_text(row_v2), CodecVersion::V2)
+            HrValue::V2(row_v2)
         }
         Some(_ /* v1 */) => {
             let mut data = val;
@@ -72,41 +58,33 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 table::decode_row_vec(&mut data, &mut EvalContext::default(), &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
             let row_v1 = RowV1 { ids, datums };
-            (to_text(row_v1), CodecVersion::V1)
+            HrValue::V1(row_v1)
         }
-        None => (Default::default(), CodecVersion::V1),
+        None => HrValue::V1(Default::default()),
     };
 
     let key = HrDataKey::from_encoded(key);
 
-    Ok(to_text(HrKv {
-        version,
-        key,
-        value,
-    }))
+    Ok(to_text(HrKv { key, value }))
 }
 
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
-    let HrKv {
-        version,
-        key,
-        value,
-    } = from_text(line);
-    match version {
-        CodecVersion::V1 => {
-            let RowV1 { ids, datums } = from_text(&value);
+    let HrKv { key, value } = from_text(line);
+    match value {
+        HrValue::V1(row) => {
+            let RowV1 { ids, datums } = row;
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let value = table::encode_row(&mut EvalContext::default(), datums, &ids).unwrap();
             (key.into_encoded(), value)
         }
-        CodecVersion::V2 => {
+        HrValue::V2(row) => {
             let RowV2 {
                 is_big,
                 non_null_ids,
                 null_ids,
                 datums,
-            } = from_text(&value);
+            } = row;
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
             buf.write_row_with_datum(is_big, non_null_ids, null_ids, datums)
