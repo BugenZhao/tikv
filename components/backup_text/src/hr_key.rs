@@ -72,13 +72,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_it_works() {
+    fn test_default_cf() {
         let encoded_key = vec![
-            122, // z
-            116, // t
-            128, 0, 0, 0, 0, 0, 0, 255, 57, 95, 114, // _r
-            128, 0, 0, 0, 0, 255, 0, 0, 32, 0, 0, 0, 0, 0, 250, 250, 18, 176, 87, 104, 223, 255,
-            253,
+            122, 116, 128, 0, 0, 0, 0, 0, 0, 255, 59, 95, 114, 128, 0, 0, 0, 0, 255, 0, 0, 10, 0,
+            0, 0, 0, 0, 250, 250, 18, 182, 126, 209, 95, 255, 253,
+        ];
+
+        let hr = HrDataKey::from_encoded(&encoded_key);
+        println!("{}", serde_json::to_string(&hr).unwrap());
+        let restored_encoded_key = hr.into_encoded();
+        assert_eq!(encoded_key, restored_encoded_key);
+    }
+
+    #[test]
+    fn test_write_cf() {
+        let encoded_key = vec![
+            122, 116, 128, 0, 0, 0, 0, 0, 0, 255, 59, 95, 114, 128, 0, 0, 0, 0, 255, 0, 0, 10, 0,
+            0, 0, 0, 0, 250, 250, 18, 182, 126, 208, 151, 255, 254,
         ];
 
         let hr = HrDataKey::from_encoded(&encoded_key);
