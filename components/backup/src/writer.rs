@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::File as StdFile;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 use backup_text::rwer::TextWriter;
@@ -22,7 +22,7 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tipb::TableInfo;
-use txn_types::{Key, KvPair, TimeStamp, WriteRef};
+use txn_types::{Key, KvPair, WriteRef};
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};

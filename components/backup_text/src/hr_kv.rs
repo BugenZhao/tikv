@@ -1,24 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-
-use crate::hr_datum::{HrBytes, HrDatum};
+use crate::hr_datum::HrBytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrKv {
+    #[serde(rename = "ver")]
+    pub version: CodecVersion,
     #[serde(rename = "k")]
     pub key: HrBytes,
     #[serde(rename = "v")]
-    pub value: HashMap<i64, HrDatum>,
+    pub value: String,
 }
 
-impl HrKv {
-    pub fn to_text(&self) -> String {
-        serde_json::to_string(&self).unwrap()
-    }
-
-    pub fn from_text(text: impl AsRef<str>) -> Self {
-        serde_json::from_str(text.as_ref()).unwrap()
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CodecVersion {
+    V1,
+    V2,
 }

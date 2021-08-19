@@ -145,19 +145,10 @@ impl Into<Datum> for HrDatum {
     }
 }
 
-impl HrDatum {
-    pub fn to_text(&self) -> String {
-        serde_json::to_string(&self).unwrap()
-    }
-
-    pub fn from_text(text: impl AsRef<str>) -> Self {
-        serde_json::from_str(text.as_ref()).unwrap()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{from_text, to_text};
 
     #[test]
     fn test_it_works() {
@@ -196,9 +187,9 @@ mod tests {
         ];
 
         for datum in datums {
-            let enc = HrDatum::from(datum.clone()).to_text();
+            let enc = to_text(HrDatum::from(datum.clone()));
             println!("{}", enc);
-            let dec: Datum = HrDatum::from_text(enc).into();
+            let dec: Datum = from_text::<HrDatum>(&enc).into();
             dbg!(&datum, &dec);
             assert_eq!(datum, dec);
         }

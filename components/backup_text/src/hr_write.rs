@@ -12,16 +12,6 @@ pub struct HrKvWrite {
     pub value: HrWrite,
 }
 
-impl HrKvWrite {
-    pub fn to_text(&self) -> String {
-        serde_json::to_string(&self).unwrap()
-    }
-
-    pub fn from_text(text: impl AsRef<str>) -> Self {
-        serde_json::from_str(text.as_ref()).unwrap()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrWrite {
     #[serde(rename = "t")]

@@ -128,7 +128,7 @@ impl RowSlice<'_> {
     }
 
     #[inline]
-    fn is_big(&self) -> bool {
+    pub fn is_big(&self) -> bool {
         match self {
             RowSlice::Big { .. } => true,
             RowSlice::Small { .. } => false,
@@ -159,6 +159,42 @@ impl RowSlice<'_> {
             })?))
         } else {
             Ok(None)
+        }
+    }
+
+    #[inline]
+    pub fn values_num(&self) -> usize {
+        match self {
+            RowSlice::Big { non_null_ids, .. } => non_null_ids.len(),
+            RowSlice::Small { non_null_ids, .. } => non_null_ids.len(),
+        }
+    }
+
+    pub fn non_null_ids(&self) -> Vec<u32> {
+        match self {
+            RowSlice::Big { non_null_ids, .. } => non_null_ids.to_vec(),
+            RowSlice::Small { non_null_ids, .. } => {
+                let ids = non_null_ids.to_vec();
+                let mut v = Vec::with_capacity(ids.len());
+                for i in ids {
+                    v.push(i as u32)
+                }
+                v
+            }
+        }
+    }
+
+    pub fn null_ids(&self) -> Vec<u32> {
+        match self {
+            RowSlice::Big { null_ids, .. } => null_ids.to_vec(),
+            RowSlice::Small { null_ids, .. } => {
+                let ids = null_ids.to_vec();
+                let mut v = Vec::with_capacity(ids.len());
+                for i in ids {
+                    v.push(i as u32)
+                }
+                v
+            }
         }
     }
 }
@@ -241,6 +277,23 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
         } else {
             Err(base + (cmp == Less) as usize)
         }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.slice.len() / std::mem::size_of::<T>()
+    }
+
+    #[inline]
+    pub fn to_vec(&self) -> Vec<T> {
+        let num = self.slice.len() / std::mem::size_of::<T>();
+        let mut v = Vec::with_capacity(num);
+        for idx in 0..num {
+            if let Some(t) = self.get(idx) {
+                v.push(t);
+            }
+        }
+        v
     }
 }
 
