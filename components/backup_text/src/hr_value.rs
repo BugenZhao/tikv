@@ -27,6 +27,8 @@ pub struct RowV2 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "V")]
 pub enum HrValue {
+    #[serde(rename = "1")]
     V1(RowV1),
+    #[serde(rename = "2")]
     V2(RowV2),
 }
