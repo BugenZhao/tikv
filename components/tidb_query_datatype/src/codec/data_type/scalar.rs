@@ -130,6 +130,8 @@ impl_from! { Bytes }
 impl_from! { DateTime }
 impl_from! { Duration }
 impl_from! { Json }
+impl_from! { Enum }
+impl_from! { Set }
 
 impl From<Option<f64>> for ScalarValue {
     #[inline]

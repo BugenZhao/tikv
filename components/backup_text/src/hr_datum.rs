@@ -148,7 +148,12 @@ impl Into<Datum> for HrDatum {
             HrDatum::Time(t) => Datum::Time(Time(t.raw)),
             HrDatum::Json(j) => Datum::Json(j.parse().unwrap()),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
-            HrDatum::Set(s) => Datum::Set(Set::new(NULL_BUFFER_VEC.clone(), s.value)),
+            HrDatum::Set(s) => Datum::Set(Set::new(
+                // todo: this is currently ok since we always flatten it before encoding,
+                // where the `data` field is ignored
+                NULL_BUFFER_VEC.clone(),
+                s.value,
+            )),
             HrDatum::Min => Datum::Min,
             HrDatum::Max => Datum::Max,
         }
@@ -189,8 +194,10 @@ mod tests {
             Datum::Max,
             Datum::Min,
             Datum::Null,
+            // enum
+            Datum::Enum(Enum::parse_value(2, &["bug".to_owned(), "gen".to_owned()])),
             // set
-            // Datum::Set(Set::parse_set_value(value, elems)),
+            Datum::Set(Set::parse_value(3, &["bug".to_owned(), "gen".to_owned()])),
             // time
             Datum::Time(Time::parse_datetime(ctx, "2021-08-12 12:34:56.789", 3, false).unwrap()),
             Datum::Time(Time::parse_date(ctx, "2021-08-12").unwrap()),
@@ -200,8 +207,13 @@ mod tests {
             let enc = to_text(HrDatum::from(datum.clone()));
             println!("{}", enc);
             let dec: Datum = from_text::<HrDatum>(&enc).into();
-            dbg!(&datum, &dec);
-            assert_eq!(datum, dec);
+
+            match (datum, dec) {
+                // only check u64 value for enum and set
+                (Datum::Enum(e), Datum::Enum(dec_e)) => assert_eq!(e.value(), dec_e.value()),
+                (Datum::Set(s), Datum::Set(dec_s)) => assert_eq!(s.value(), dec_s.value()),
+                (datum, dec) => assert_eq!(datum, dec),
+            }
         }
     }
 }

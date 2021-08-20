@@ -188,7 +188,7 @@ pub trait FieldTypeAccessor {
 
     fn elems(&self) -> &[String];
 
-    // fn set_elems(&mut self, )
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor;
 
     /// Convert reference to `FieldTypeAccessor` interface. Useful when an implementer
     /// provides inherent methods with the same name as the accessor trait methods.
@@ -363,6 +363,12 @@ impl FieldTypeAccessor for FieldType {
     fn elems(&self) -> &[String] {
         self.get_elems()
     }
+
+    #[inline]
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor {
+        FieldType::set_elems(self, elems.into());
+        self as &mut dyn FieldTypeAccessor
+    }
 }
 
 impl FieldTypeAccessor for ColumnInfo {
@@ -424,6 +430,12 @@ impl FieldTypeAccessor for ColumnInfo {
     #[inline]
     fn elems(&self) -> &[String] {
         self.get_elems()
+    }
+
+    #[inline]
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor {
+        ColumnInfo::set_elems(self, elems.into());
+        self as &mut dyn FieldTypeAccessor
     }
 }
 
