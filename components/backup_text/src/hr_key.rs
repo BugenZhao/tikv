@@ -37,15 +37,11 @@ pub struct HrDataKey {
 impl HrDataKey {
     pub fn from_encoded(encoded_key: &[u8]) -> Self {
         let origin_encoded_key = keys::origin_key(encoded_key);
-        let key = Key::from_encoded_slice(origin_encoded_key);
-        let ts = key.decode_ts().map(|ts| ts.into_inner()).ok();
-        let raw_key = if ts.is_some() {
-            key.truncate_ts().unwrap()
-        } else {
-            key
-        }
-        .into_raw()
-        .unwrap();
+        let (user_key, ts) = Key::split_on_ts_for(origin_encoded_key).map_or_else(
+            |_| (origin_encoded_key, None),
+            |(k, t)| (k, Some(t.into_inner())),
+        );
+        let raw_key = Key::from_encoded_slice(user_key).into_raw().unwrap();
 
         let table_id = decode_table_id(&raw_key).unwrap();
         let handle = decode_int_handle(&raw_key)
