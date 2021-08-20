@@ -16,13 +16,17 @@ protobuf-codec = [
 [dependencies]
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+keys = { path = "../keys", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.66"
+serde_json = "1.0"
 collections = { path = "../collections/" }
 txn_types = { path = "../txn_types", default-features = false }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = [
+    "max_level_trace",
+    "release_max_level_debug",
+] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

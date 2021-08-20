@@ -2,13 +2,14 @@
 
 use crate::{
     from_text,
-    hr_datum::{HrBytes, HrDatum},
-    hr_kv::{CodecVersion, HrKv},
+    hr_datum::HrDatum,
+    hr_key::HrDataKey,
+    hr_kv::HrKv,
+    hr_value::{HrValue, RowV1, RowV2},
     hr_write::{HrKvWrite, HrWrite},
     to_text,
 };
 use datum::DatumDecoder;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tidb_query_datatype::codec::row::v2::{
     encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder,
@@ -20,20 +21,6 @@ use tidb_query_datatype::{
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RowV1 {
-    ids: Vec<u32>,
-    datums: Vec<HrDatum>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RowV2 {
-    is_big: bool,
-    non_null_ids: Vec<u32>,
-    null_ids: Vec<u32>,
-    datums: Vec<HrDatum>,
-}
-
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
     let columns_info = table.get_columns();
     let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
@@ -41,7 +28,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         .map(|ci| (ci.get_column_id(), ci))
         .collect();
 
-    let (value, version) = match val.get(0) {
+    let value = match val.get(0) {
         Some(&row::v2::CODEC_VERSION) => {
             let row = RowSlice::from_bytes(val)?;
             let mut non_null_ids = Vec::with_capacity(row.values_num());
@@ -63,7 +50,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 null_ids: row.null_ids(),
                 datums: hr_datums,
             };
-            (to_text(row_v2), CodecVersion::V2)
+            HrValue::V2(row_v2)
         }
         Some(_ /* v1 */) => {
             let mut data = val;
@@ -71,51 +58,45 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 table::decode_row_vec(&mut data, &mut EvalContext::default(), &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
             let row_v1 = RowV1 { ids, datums };
-            (to_text(row_v1), CodecVersion::V1)
+            HrValue::V1(row_v1)
         }
-        None => (Default::default(), CodecVersion::V1),
+        None => HrValue::V1(Default::default()),
     };
 
-    Ok(to_text(HrKv {
-        version,
-        key: HrBytes::from(key.to_vec()),
-        value,
-    }))
+    let key = HrDataKey::from_encoded(key);
+
+    Ok(to_text(HrKv { key, value }))
 }
 
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
-    let HrKv {
-        version,
-        key,
-        value,
-    } = from_text(line);
-    match version {
-        CodecVersion::V1 => {
-            let RowV1 { ids, datums } = from_text(&value);
+    let HrKv { key, value } = from_text(line);
+    match value {
+        HrValue::V1(row) => {
+            let RowV1 { ids, datums } = row;
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let value = table::encode_row(&mut EvalContext::default(), datums, &ids).unwrap();
-            (key.into(), value)
+            (key.into_encoded(), value)
         }
-        CodecVersion::V2 => {
+        HrValue::V2(row) => {
             let RowV2 {
                 is_big,
                 non_null_ids,
                 null_ids,
                 datums,
-            } = from_text(&value);
+            } = row;
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
             buf.write_row_with_datum(is_big, non_null_ids, null_ids, datums)
                 .unwrap();
-            (key.into(), buf)
+            (key.into_encoded(), buf)
         }
     }
 }
 
 pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
     let hr_write = HrKvWrite {
-        key: HrBytes::from(key.to_vec()),
+        key: HrDataKey::from_encoded(&key),
         value: HrWrite::from(WriteRef::parse(val).unwrap()),
     };
     to_text(hr_write)
@@ -124,7 +105,7 @@ pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
 pub fn write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKvWrite { key, value } = from_text(line);
     let value: WriteRef<'_> = value.into();
-    (key.into(), value.to_bytes())
+    (key.into_encoded(), value.to_bytes())
 }
 
 #[cfg(test)]
@@ -135,23 +116,31 @@ mod tests {
         codec::{
             data_type::{DateTime, Decimal, Duration, Json},
             row::v2::{self, encoder_for_test::Column as V2Column},
-            table::{decode_row, encode_row},
+            table::{decode_row, encode_row, encode_row_key},
             Datum,
         },
         FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
     };
 
     use tikv_util::map;
+    use txn_types::Key;
 
     use super::*;
     use collections::HashMap;
 
     fn table() -> (
+        Vec<u8>,
         HashMap<i64, ColumnInfo>,
         HashMap<i64, Datum>,
         Vec<V2Column>,
         TableInfo,
     ) {
+        let key = keys::data_key(
+            &Key::from_raw(&encode_row_key(233, 666))
+                .append_ts(123456789.into())
+                .into_encoded(),
+        );
+
         let duration_col = {
             let mut col = ColumnInfo::default();
             col.as_mut_accessor()
@@ -168,7 +157,7 @@ mod tests {
             col
         };
 
-        let cols = map![
+        let cols_v1 = map![
             1 => FieldTypeTp::LongLong.into(),
             2 => FieldTypeTp::VarChar.into(),
             3 => FieldTypeTp::NewDecimal.into(),
@@ -220,7 +209,8 @@ mod tests {
             let mut info = TableInfo::new();
             info.set_table_id(233);
             info.set_columns(
-                cols.clone()
+                cols_v1
+                    .clone()
                     .into_iter()
                     .map(|(id, mut ci)| {
                         ci.set_column_id(id);
@@ -231,56 +221,52 @@ mod tests {
             info
         };
 
-        (cols, row, cols_v2, table_info)
+        (key, cols_v1, row, cols_v2, table_info)
     }
 
     #[test]
     fn test_v1() {
-        let (cols, row, _, table_info) = table();
+        let (key, cols_v1, row, _, table_info) = table();
         let col_ids = row.iter().map(|p| *p.0).collect::<Vec<_>>();
         let col_values = row.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
 
-        let key = b"dummy_key";
         let val = encode_row(&mut EvalContext::default(), col_values.clone(), &col_ids).unwrap();
 
-        let text = kv_to_text(key, &val, &table_info).unwrap();
+        let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
-        let (dec_key, dec_val) = text_to_kv(&text, &table_info);
-        let dec_row =
-            decode_row(&mut dec_val.as_slice(), &mut EvalContext::default(), &cols).unwrap();
-        println!("{:?}", dec_row);
+        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
+        let restored_row = decode_row(
+            &mut restored_val.as_slice(),
+            &mut EvalContext::default(),
+            &cols_v1,
+        )
+        .unwrap();
+        println!("{:?}", restored_row);
 
-        assert_eq!(dec_key, key);
-        assert_eq!(dec_row, row);
+        assert_eq!(restored_key, key);
+        assert_eq!(restored_val, val);
+        assert_eq!(restored_row, row);
     }
 
     #[test]
     fn test_v2() {
         use v2::encoder_for_test::RowEncoder;
 
-        let (cols_v1, row, cols_v2, table_info) = table();
+        let (key, _, _, cols_v2, table_info) = table();
 
-        let key = b"dummy_key";
         let val = {
             let mut buf = vec![];
             buf.write_row(&mut EvalContext::default(), cols_v2).unwrap();
             buf
         };
 
-        let text = kv_to_text(key, &val, &table_info).unwrap();
+        let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
-        let (dec_key, dec_val) = text_to_kv(&text, &table_info);
-        let dec_row = decode_row(
-            &mut dec_val.as_slice(),
-            &mut EvalContext::default(),
-            &cols_v1,
-        )
-        .unwrap();
-        println!("{:?}", dec_row);
+        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
 
-        assert_eq!(dec_key, key);
-        assert_eq!(dec_row, row);
+        assert_eq!(restored_key, key);
+        assert_eq!(restored_val, val);
     }
 }
