@@ -22,6 +22,7 @@ use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
+    let ctx = &mut EvalContext::default();
     let columns_info = table.get_columns();
     let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
         .iter()
@@ -54,8 +55,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         }
         Some(_ /* v1 */) => {
             let mut data = val;
-            let (ids, datums) =
-                table::decode_row_vec(&mut data, &mut EvalContext::default(), &column_id_info)?;
+            let (ids, datums) = table::decode_row_vec(&mut data, ctx, &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
             let row_v1 = RowV1 { ids, datums };
             HrValue::V1(row_v1)
@@ -69,13 +69,15 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
 }
 
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
+    let ctx = &mut EvalContext::default();
     let HrKv { key, value } = from_text(line);
+
     match value {
         HrValue::V1(row) => {
             let RowV1 { ids, datums } = row;
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
-            let value = table::encode_row(&mut EvalContext::default(), datums, &ids).unwrap();
+            let value = table::encode_row(ctx, datums, &ids).unwrap();
             (key.into_encoded(), value)
         }
         HrValue::V2(row) => {
@@ -87,7 +89,7 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
             } = row;
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
-            buf.write_row_with_datum(is_big, non_null_ids, null_ids, datums)
+            buf.write_row_with_datum(ctx, is_big, non_null_ids, null_ids, datums)
                 .unwrap();
             (key.into_encoded(), buf)
         }

@@ -19,4 +19,5 @@ mod row_slice;
 pub use self::compat_v1::*;
 pub use self::row_slice::*;
 
+pub mod decoder;
 pub mod encoder_for_test;

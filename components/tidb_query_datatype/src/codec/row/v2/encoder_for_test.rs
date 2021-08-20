@@ -22,6 +22,7 @@
 use crate::codec::{
     data_type::ScalarValue,
     mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+    table::flatten,
     Datum, Error, Result,
 };
 
@@ -138,6 +139,7 @@ pub trait RowEncoder: NumberEncoder {
 
     fn write_row_with_datum(
         &mut self,
+        ctx: &mut EvalContext,
         is_big: bool,
         non_null_ids: Vec<u32>,
         null_ids: Vec<u32>,
@@ -156,6 +158,7 @@ pub trait RowEncoder: NumberEncoder {
         let mut offset_wtr = vec![];
         let mut value_wtr = vec![];
         for d in datums {
+            let d = flatten(ctx, d)?; // todo: check this
             value_wtr.write_datum(&d)?;
             offset_wtr.write_offset(is_big, value_wtr.len())?;
         }

@@ -39,6 +39,20 @@ impl Set {
             value: self.value,
         }
     }
+
+    /// `parse_set_value` creates a Set with special number.
+    pub fn parse_set_value(value: u64, elems: &[String]) -> Self {
+        let data = {
+            let data_cap = elems.iter().map(|e| e.len()).sum();
+            let mut buf = BufferVec::with_capacity(elems.len(), data_cap);
+            for elem in elems {
+                buf.push(elem.as_bytes());
+            }
+            Arc::new(buf)
+        };
+
+        Self::new(data, value)
+    }
 }
 
 impl Display for Set {

@@ -259,6 +259,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "keys",
+ "lazy_static",
  "serde",
  "serde_json",
  "slog",
