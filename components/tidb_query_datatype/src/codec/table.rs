@@ -5,6 +5,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::{cmp, u8};
 
+use crate::codec::data_type::{Enum, Set};
 use crate::prelude::*;
 use crate::FieldTypeTp;
 use kvproto::coprocessor::KeyRange;
@@ -140,6 +141,8 @@ pub fn flatten(ctx: &mut EvalContext, data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
         Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64(ctx)?)),
+        Datum::Enum(e) => Ok(Datum::U64(e.value())),
+        Datum::Set(s) => Ok(Datum::U64(s.value())),
         _ => Ok(data),
     }
 }
@@ -257,7 +260,7 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(
+pub fn unflatten(
     ctx: &mut EvalContext,
     datum: Datum,
     field_type: &dyn FieldTypeAccessor,
@@ -276,30 +279,35 @@ fn unflatten(
         FieldTypeTp::Duration => {
             Duration::from_nanos(datum.i64(), field_type.decimal() as i8).map(Datum::Dur)
         }
-        FieldTypeTp::Enum | FieldTypeTp::Set | FieldTypeTp::Bit => Err(box_err!(
+        FieldTypeTp::Enum => Ok(Datum::Enum(Enum::parse_value(
+            datum.u64(),
+            field_type.elems(),
+        ))),
+        FieldTypeTp::Set => Ok(Datum::Set(Set::parse_value(
+            datum.u64(),
+            field_type.elems(),
+        ))),
+        FieldTypeTp::Bit => Err(box_err!(
             "unflatten field type {} is not supported yet.",
             tp
         )),
+        FieldTypeTp::Tiny
+        | FieldTypeTp::Short
+        | FieldTypeTp::Year
+        | FieldTypeTp::Int24
+        | FieldTypeTp::Long
+        | FieldTypeTp::LongLong
+        | FieldTypeTp::Double => Ok(datum),
+        FieldTypeTp::TinyBlob
+        | FieldTypeTp::MediumBlob
+        | FieldTypeTp::Blob
+        | FieldTypeTp::LongBlob
+        | FieldTypeTp::VarChar
+        | FieldTypeTp::String
+        | FieldTypeTp::VarString => Ok(datum),
         t => {
             debug_assert!(
-                [
-                    FieldTypeTp::Tiny,
-                    FieldTypeTp::Short,
-                    FieldTypeTp::Year,
-                    FieldTypeTp::Int24,
-                    FieldTypeTp::Long,
-                    FieldTypeTp::LongLong,
-                    FieldTypeTp::Double,
-                    FieldTypeTp::TinyBlob,
-                    FieldTypeTp::MediumBlob,
-                    FieldTypeTp::Blob,
-                    FieldTypeTp::LongBlob,
-                    FieldTypeTp::VarChar,
-                    FieldTypeTp::String,
-                    FieldTypeTp::NewDecimal,
-                    FieldTypeTp::JSON
-                ]
-                .contains(&t),
+                [FieldTypeTp::NewDecimal, FieldTypeTp::JSON].contains(&t),
                 "unknown type {} {}",
                 t,
                 datum

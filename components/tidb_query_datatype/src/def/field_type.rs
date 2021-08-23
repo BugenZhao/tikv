@@ -186,6 +186,10 @@ pub trait FieldTypeAccessor {
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
+    fn elems(&self) -> &[String];
+
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor;
+
     /// Convert reference to `FieldTypeAccessor` interface. Useful when an implementer
     /// provides inherent methods with the same name as the accessor trait methods.
     fn as_accessor(&self) -> &dyn FieldTypeAccessor
@@ -354,6 +358,17 @@ impl FieldTypeAccessor for FieldType {
         FieldType::set_collate(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
     }
+
+    #[inline]
+    fn elems(&self) -> &[String] {
+        self.get_elems()
+    }
+
+    #[inline]
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor {
+        FieldType::set_elems(self, elems.into());
+        self as &mut dyn FieldTypeAccessor
+    }
 }
 
 impl FieldTypeAccessor for ColumnInfo {
@@ -409,6 +424,17 @@ impl FieldTypeAccessor for ColumnInfo {
     #[inline]
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
+        self as &mut dyn FieldTypeAccessor
+    }
+
+    #[inline]
+    fn elems(&self) -> &[String] {
+        self.get_elems()
+    }
+
+    #[inline]
+    fn set_elems(&mut self, elems: &[String]) -> &mut dyn FieldTypeAccessor {
+        ColumnInfo::set_elems(self, elems.into());
         self as &mut dyn FieldTypeAccessor
     }
 }

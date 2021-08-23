@@ -11,8 +11,9 @@ use crate::{
 };
 use datum::DatumDecoder;
 use std::collections::HashMap;
-use tidb_query_datatype::codec::row::v2::{
-    encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder,
+use tidb_query_datatype::codec::{
+    row::v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
+    table::unflatten,
 };
 use tidb_query_datatype::{
     codec::{datum, row, table, Result as CodecResult},
@@ -22,6 +23,7 @@ use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
+    let ctx = &mut EvalContext::default();
     let columns_info = table.get_columns();
     let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
         .iter()
@@ -36,10 +38,13 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
             for id in row.non_null_ids() {
                 if let Some(ci) = column_id_info.get(&(id as i64)) {
                     let (start, offset) = row.search_in_non_null_ids(id as i64)?.unwrap();
-                    // encode with V1CompatibleEncoder and decode as v1 datum
-                    let mut buf = vec![];
-                    buf.write_v2_as_datum(&row.values()[start..offset], *ci)?;
-                    let datum = (&mut buf.as_slice()).read_datum()?;
+                    let raw_datum = {
+                        // encode with V1CompatibleEncoder and decode as v1 datum
+                        let mut buf = vec![];
+                        buf.write_v2_as_datum(&row.values()[start..offset], *ci)?;
+                        (&mut buf.as_slice()).read_datum()?
+                    };
+                    let datum = unflatten(ctx, raw_datum, *ci)?;
                     non_null_ids.push(id);
                     hr_datums.push(HrDatum::from(datum));
                 }
@@ -54,8 +59,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         }
         Some(_ /* v1 */) => {
             let mut data = val;
-            let (ids, datums) =
-                table::decode_row_vec(&mut data, &mut EvalContext::default(), &column_id_info)?;
+            let (ids, datums) = table::decode_row_vec(&mut data, ctx, &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
             let row_v1 = RowV1 { ids, datums };
             HrValue::V1(row_v1)
@@ -69,13 +73,15 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
 }
 
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
+    let ctx = &mut EvalContext::default();
     let HrKv { key, value } = from_text(line);
+
     match value {
         HrValue::V1(row) => {
             let RowV1 { ids, datums } = row;
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
-            let value = table::encode_row(&mut EvalContext::default(), datums, &ids).unwrap();
+            let value = table::encode_row(ctx, datums, &ids).unwrap();
             (key.into_encoded(), value)
         }
         HrValue::V2(row) => {
@@ -87,7 +93,7 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
             } = row;
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
-            buf.write_row_with_datum(is_big, non_null_ids, null_ids, datums)
+            buf.write_row_with_datum(ctx, is_big, non_null_ids, null_ids, datums)
                 .unwrap();
             (key.into_encoded(), buf)
         }
@@ -114,7 +120,7 @@ mod tests {
 
     use tidb_query_datatype::{
         codec::{
-            data_type::{DateTime, Decimal, Duration, Json},
+            data_type::{DateTime, Decimal, Duration, Enum, Json, Set},
             row::v2::{self, encoder_for_test::Column as V2Column},
             table::{decode_row, encode_row, encode_row_key},
             Datum,
@@ -157,6 +163,24 @@ mod tests {
             col
         };
 
+        let enum_elems = vec!["bug".to_owned(), "gen".to_owned()];
+        let enum_col = {
+            let mut col = ColumnInfo::default();
+            col.as_mut_accessor()
+                .set_tp(FieldTypeTp::Enum)
+                .set_elems(&enum_elems);
+            col
+        };
+
+        let set_elems = vec!["bug".to_owned(), "gen".to_owned()];
+        let set_col = {
+            let mut col = ColumnInfo::default();
+            col.as_mut_accessor()
+                .set_tp(FieldTypeTp::Set)
+                .set_elems(&set_elems);
+            col
+        };
+
         let cols_v1 = map![
             1 => FieldTypeTp::LongLong.into(),
             2 => FieldTypeTp::VarChar.into(),
@@ -164,7 +188,9 @@ mod tests {
             5 => FieldTypeTp::JSON.into(),
             6 => duration_col,
             7 => small_unsigned_col,
-            8 => FieldTypeTp::DateTime.into()
+            8 => FieldTypeTp::DateTime.into(),
+            9 => enum_col,
+            11 => set_col
         ];
 
         let small_int = || 42;
@@ -182,6 +208,8 @@ mod tests {
             )
             .unwrap()
         };
+        let enum_ = || Enum::parse_value(2, &enum_elems);
+        let set = || Set::parse_value(0b11, &set_elems);
 
         let row = map![
             1 => Datum::I64(int()),
@@ -190,7 +218,9 @@ mod tests {
             5 => Datum::Json(json()),
             6 => Datum::Dur(dur()),
             7 => Datum::U64(small_int()),
-            8 => Datum::Time(time())
+            8 => Datum::Time(time()),
+            9 => Datum::Enum(enum_()),
+            11 => Datum::Set(set())
         ];
 
         let cols_v2 = vec![
@@ -203,6 +233,8 @@ mod tests {
                 .with_decimal(2),
             V2Column::new(7, small_int() as i64).with_unsigned(),
             V2Column::new(8, time()).with_tp(FieldTypeTp::DateTime),
+            V2Column::new(9, enum_()),
+            V2Column::new(11, set()),
         ];
 
         let table_info = {

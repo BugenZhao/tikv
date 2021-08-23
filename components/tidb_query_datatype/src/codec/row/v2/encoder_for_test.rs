@@ -22,6 +22,7 @@
 use crate::codec::{
     data_type::ScalarValue,
     mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+    table::flatten,
     Datum, Error, Result,
 };
 
@@ -138,6 +139,7 @@ pub trait RowEncoder: NumberEncoder {
 
     fn write_row_with_datum(
         &mut self,
+        ctx: &mut EvalContext,
         is_big: bool,
         non_null_ids: Vec<u32>,
         null_ids: Vec<u32>,
@@ -156,6 +158,7 @@ pub trait RowEncoder: NumberEncoder {
         let mut offset_wtr = vec![];
         let mut value_wtr = vec![];
         for d in datums {
+            let d = flatten(ctx, d)?;
             value_wtr.write_datum(&d)?;
             offset_wtr.write_offset(is_big, value_wtr.len())?;
         }
@@ -215,6 +218,8 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
             }
             ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
             ScalarValue::Json(Some(v)) => self.write_json(v.as_ref()),
+            ScalarValue::Enum(Some(e)) => self.encode_u64(e.value()).map_err(Error::from),
+            ScalarValue::Set(Some(s)) => self.encode_u64(s.value()).map_err(Error::from),
             _ => unreachable!(),
         }
     }
@@ -244,7 +249,8 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
 impl<T: BufferWriter> ScalarValueEncoder for T {}
 
 pub trait DatumValueEncoder: DecimalEncoder + JsonEncoder {
-    // Encode datum, which previously written by `write_v2_as_datum`, into v2 row format
+    /// Encode datum, which previously written by `write_v2_as_datum`, into v2 row format.
+    /// Caller must ensure that `datum` is flattened.
     #[inline]
     fn write_datum(&mut self, datum: &Datum) -> Result<()> {
         match datum {
@@ -265,7 +271,7 @@ pub trait DatumValueEncoder: DecimalEncoder + JsonEncoder {
             | Datum::Enum(_)
             | Datum::Set(_)
             | Datum::Min
-            | Datum::Max => unreachable!(),
+            | Datum::Max => unreachable!("datum {:?} is not flattened", datum),
         }
     }
 
