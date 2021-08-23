@@ -22,7 +22,9 @@ tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = [
+    "float_roundtrip", # enable this to ensure sufficient precision for float numbers
+] }
 collections = { path = "../collections/" }
 txn_types = { path = "../txn_types", default-features = false }
 slog = { version = "2.3", features = [
