@@ -54,7 +54,7 @@ impl Enum {
         name.as_bytes()
     }
 
-    /// `parse_enum_value` creates a Enum with special number.
+    /// `parse_value` creates a `Enum` with special number.
     pub fn parse_value(value: u64, elems: &[String]) -> Self {
         let name = Self::get_value_name(value, elems);
         Self::new(name.to_vec(), value)

@@ -304,7 +304,7 @@ pub fn unflatten(
         | FieldTypeTp::LongBlob
         | FieldTypeTp::VarChar
         | FieldTypeTp::String
-        | FieldTypeTp::VarString => Ok(datum), // todo: string collation
+        | FieldTypeTp::VarString => Ok(datum),
         t => {
             debug_assert!(
                 [FieldTypeTp::NewDecimal, FieldTypeTp::JSON].contains(&t),

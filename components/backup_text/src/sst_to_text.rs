@@ -209,7 +209,7 @@ mod tests {
             .unwrap()
         };
         let enum_ = || Enum::parse_value(2, &enum_elems);
-        let set = || Set::parse_value(3, &set_elems);
+        let set = || Set::parse_value(0b11, &set_elems);
 
         let row = map![
             1 => Datum::I64(int()),

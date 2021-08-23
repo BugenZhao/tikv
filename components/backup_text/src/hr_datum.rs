@@ -149,8 +149,7 @@ impl Into<Datum> for HrDatum {
             HrDatum::Json(j) => Datum::Json(j.parse().unwrap()),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
             HrDatum::Set(s) => Datum::Set(Set::new(
-                // todo: this is currently ok since we always flatten it before encoding,
-                // where the `data` field is ignored
+                // todo: this is currently ok since we always flatten it before encoding, where the `data` field is ignored
                 NULL_BUFFER_VEC.clone(),
                 s.value,
             )),
@@ -197,7 +196,7 @@ mod tests {
             // enum
             Datum::Enum(Enum::parse_value(2, &["bug".to_owned(), "gen".to_owned()])),
             // set
-            Datum::Set(Set::parse_value(3, &["bug".to_owned(), "gen".to_owned()])),
+            Datum::Set(Set::parse_value(0b11, &["bug".to_owned(), "gen".to_owned()])),
             // time
             Datum::Time(Time::parse_datetime(ctx, "2021-08-12 12:34:56.789", 3, false).unwrap()),
             Datum::Time(Time::parse_date(ctx, "2021-08-12").unwrap()),

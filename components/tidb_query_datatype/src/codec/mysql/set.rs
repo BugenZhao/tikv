@@ -40,7 +40,7 @@ impl Set {
         }
     }
 
-    /// `parse_set_value` creates a Set with special number.
+    /// `parse_value` creates a `Set` with special number.
     pub fn parse_value(value: u64, elems: &[String]) -> Self {
         let data = {
             let data_cap = elems.iter().map(|e| e.len()).sum();
