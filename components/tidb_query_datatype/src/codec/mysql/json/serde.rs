@@ -4,6 +4,7 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer};
 use serde_json::Serializer as JsonSerializer;
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use std::string::ToString;
@@ -159,10 +160,10 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        if v > (std::i64::MAX as u64) {
-            Ok(Json::from_f64(v as f64).map_err(de::Error::custom)?)
+        if let Ok(v) = i64::try_from(v) {
+            Ok(Json::from_i64(v).map_err(de::Error::custom)?)
         } else {
-            Ok(Json::from_i64(v as i64).map_err(de::Error::custom)?)
+            Ok(Json::from_u64(v).map_err(de::Error::custom)?)
         }
     }
 
@@ -268,8 +269,12 @@ mod tests {
                 Json::from_f64(9223372036854776000.0),
             ),
             (
-                r#"9223372036854775807"#,
+                r#"9223372036854775807"#, // i64::MAX
                 Json::from_i64(9223372036854775807),
+            ),
+            (
+                r#"9223372036854775808"#, // i64::MAX + 1
+                Json::from_u64(9223372036854775808),
             ),
         ];
 

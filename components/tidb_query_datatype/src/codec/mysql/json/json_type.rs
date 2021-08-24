@@ -42,7 +42,9 @@ mod tests {
             (r#"["a", "b"]"#, JSON_TYPE_ARRAY),
             ("-5", JSON_TYPE_INTEGER),
             ("5", JSON_TYPE_INTEGER),
-            ("18446744073709551615", JSON_TYPE_DOUBLE),
+            ("9223372036854775807", JSON_TYPE_INTEGER), // i64::MAX
+            ("9223372036854775808", JSON_TYPE_UNSIGNED_INTEGER), // i64::MAX + 1
+            ("18446744073709551615", JSON_TYPE_UNSIGNED_INTEGER),
             ("5.6", JSON_TYPE_DOUBLE),
             (r#""hello, world""#, JSON_TYPE_STRING),
             ("true", JSON_TYPE_BOOLEAN),

@@ -217,6 +217,7 @@ mod tests {
             Datum::Json(r#""foo""#.parse().unwrap()),
             Datum::Json(r#"0.1010101010101010101010101010101010101010"#.parse().unwrap()),
             Datum::Json(r#"18446744073709551615"#.parse().unwrap()),
+            Datum::Json(Json::from_u64(18446744073709551615u64).unwrap()),
             // primitive
             Datum::Max,
             Datum::Min,
