@@ -184,6 +184,8 @@ impl Into<Datum> for HrDatum {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::codec::table::flatten;
+
     use super::*;
     use crate::{from_text, to_text};
 
@@ -198,6 +200,7 @@ mod tests {
             Datum::Bytes(b"\xf0\x28\x8c\x28".to_vec()),
             // decimal
             Datum::Dec("12345678987.654321".parse().unwrap()),
+            Datum::Dec("123.000".parse().unwrap()),
             Datum::Dec("123.0".parse().unwrap()),
             Datum::Dec("123".parse().unwrap()),
             // duration
@@ -239,7 +242,7 @@ mod tests {
             println!("{}", enc);
             let dec: Datum = from_text::<HrDatum>(&enc).into();
 
-            match (datum, dec) {
+            match (&datum, &dec) {
                 // only check u64 value for enum and set
                 (Datum::Enum(e), Datum::Enum(dec_e)) => {
                     assert_eq!(e.value(), dec_e.value(), "encoded as {}", enc)
@@ -249,6 +252,18 @@ mod tests {
                 }
                 (datum, dec) => assert_eq!(datum, dec, "encoded as {}", enc),
             }
+
+            use tidb_query_datatype::codec::datum::DatumEncoder;
+
+            let ctx = &mut EvalContext::default();
+            let mut v_datum = vec![];
+            let flatten_datum = flatten(ctx, datum).unwrap();
+            v_datum.write_datum(ctx, &[flatten_datum], true).unwrap();
+
+            let mut v_dec = vec![];
+            let flatten_dec = flatten(ctx, dec).unwrap();
+            v_dec.write_datum(ctx, &[flatten_dec], true).unwrap();
+            assert_eq!(v_datum, v_dec);
         }
     }
 }
