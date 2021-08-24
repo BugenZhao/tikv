@@ -181,6 +181,12 @@ mod tests {
             col
         };
 
+        let bit_col = {
+            let mut col = ColumnInfo::default();
+            col.as_mut_accessor().set_tp(FieldTypeTp::Bit);
+            col
+        };
+
         let cols_v1 = map![
             1 => FieldTypeTp::LongLong.into(),
             2 => FieldTypeTp::VarChar.into(),
@@ -190,7 +196,8 @@ mod tests {
             7 => small_unsigned_col,
             8 => FieldTypeTp::DateTime.into(),
             9 => enum_col,
-            11 => set_col
+            11 => set_col,
+            12 => bit_col
         ];
 
         let small_int = || 42;
@@ -210,6 +217,7 @@ mod tests {
         };
         let enum_ = || Enum::parse_value(2, &enum_elems);
         let set = || Set::parse_value(0b11, &set_elems);
+        let bit = || 0b11;
 
         let row = map![
             1 => Datum::I64(int()),
@@ -220,7 +228,8 @@ mod tests {
             7 => Datum::U64(small_int()),
             8 => Datum::Time(time()),
             9 => Datum::Enum(enum_()),
-            11 => Datum::Set(set())
+            11 => Datum::Set(set()),
+            12 => Datum::U64(bit())
         ];
 
         let cols_v2 = vec![
@@ -228,13 +237,12 @@ mod tests {
             V2Column::new(2, bytes()),
             V2Column::new(3, dec()),
             V2Column::new(5, json()),
-            V2Column::new(6, dur())
-                .with_tp(FieldTypeTp::Duration)
-                .with_decimal(2),
-            V2Column::new(7, small_int() as i64).with_unsigned(),
-            V2Column::new(8, time()).with_tp(FieldTypeTp::DateTime),
+            V2Column::new(6, dur()),
+            V2Column::new(7, small_int() as i64),
+            V2Column::new(8, time()),
             V2Column::new(9, enum_()),
             V2Column::new(11, set()),
+            V2Column::new(12, bit() as i64),
         ];
 
         let table_info = {

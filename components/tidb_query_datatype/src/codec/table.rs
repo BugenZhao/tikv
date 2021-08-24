@@ -287,10 +287,9 @@ pub fn unflatten(
             datum.u64(),
             field_type.elems(),
         ))),
-        FieldTypeTp::Bit => Err(box_err!(
-            "unflatten field type {} is not supported yet.",
-            tp
-        )),
+        FieldTypeTp::Bit => matches!(datum, Datum::U64(_))
+            .then(|| datum)
+            .ok_or_else(|| box_err!("unflatten field type {} is not supported yet.", tp)),
         FieldTypeTp::Tiny
         | FieldTypeTp::Short
         | FieldTypeTp::Year
