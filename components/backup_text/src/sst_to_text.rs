@@ -309,4 +309,38 @@ mod tests {
         assert_eq!(restored_key, key);
         assert_eq!(restored_val, val);
     }
+
+    #[test]
+    fn test_json_depth() {
+        let json_depth = 123;
+        let text = {
+            let mut json_text = String::new();
+            for _ in 0..json_depth {
+                json_text.push('[');
+            }
+            for _ in 0..json_depth {
+                json_text.push(']');
+            }
+            let text = r##"{"k":{"#":75,"t":427239193528500230,"h":1764},"v":{"V":"2","b":false,"#!":[2],"#?":[],"d":[{"j":<json>}]}}"##.to_owned();
+            text.replace("<json>", &json_text)
+        };
+
+        let table_info = {
+            let col_1 = {
+                let mut ci: ColumnInfo = FieldTypeTp::Long.into();
+                ci.set_column_id(1);
+                ci
+            };
+            let col_2 = {
+                let mut ci: ColumnInfo = FieldTypeTp::JSON.into();
+                ci.set_column_id(2);
+                ci
+            };
+            let mut info = TableInfo::new();
+            info.set_table_id(233);
+            info.set_columns(vec![col_1, col_2].into());
+            info
+        };
+        let (..) = text_to_kv(&text, &table_info);
+    }
 }
