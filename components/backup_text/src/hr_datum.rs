@@ -50,6 +50,8 @@ impl<'de> Deserialize<'de> for HrJson {
     where
         D: serde::Deserializer<'de>,
     {
+        // todo: `serde_json` has a recursion depth limit of 128 on deserializing and it's not safe to turn it off.
+        // while tidb allows depth up to 10000, this might be problematic on deeply nested json documents.
         Json::deserialize(deserializer).map(HrJson)
     }
 }

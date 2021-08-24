@@ -209,6 +209,8 @@ impl<'de> Deserialize<'de> for Json {
     where
         D: Deserializer<'de>,
     {
+        // todo: `serde_json` has a recursion depth limit of 128 on deserializing and it's not safe to turn it off.
+        // while tidb allows depth up to 10000, this might be problematic on deeply nested json documents.
         deserializer.deserialize_any(JsonVisitor)
     }
 }
@@ -224,6 +226,22 @@ mod tests {
         let jstr2 = j1.to_string();
         let expect_str = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
         assert_eq!(jstr2, expect_str);
+    }
+
+    #[test]
+    fn test_from_str_max_depth() {
+        let json_depth = 127;
+        let jstr = {
+            let mut json_text = String::new();
+            for _ in 0..json_depth {
+                json_text.push('[');
+            }
+            for _ in 0..json_depth {
+                json_text.push(']');
+            }
+            json_text
+        };
+        let _: Json = jstr.parse().unwrap();
     }
 
     #[test]
