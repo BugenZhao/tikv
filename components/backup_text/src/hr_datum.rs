@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tidb_query_datatype::codec::data_type::{Duration, Enum, Set};
+use tidb_query_datatype::codec::data_type::{Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
 
@@ -31,6 +31,27 @@ pub struct HrTime {
     value: String,
     #[serde(rename = "r")]
     raw: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HrJson(pub Json);
+
+impl Serialize for HrJson {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for HrJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Json::deserialize(deserializer).map(HrJson)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +107,7 @@ pub enum HrDatum {
     #[serde(rename = "t")]
     Time(HrTime),
     #[serde(rename = "j")]
-    Json(String),
+    Json(HrJson),
     #[serde(rename = "e")]
     Enum(HrEnum),
     #[serde(rename = "s")]
@@ -118,7 +139,7 @@ impl From<Datum> for HrDatum {
                 value: t.to_string(),
                 raw: t.0,
             }),
-            Datum::Json(j) => Self::Json(j.to_string()),
+            Datum::Json(j) => Self::Json(HrJson(j)),
             Datum::Enum(e) => Self::Enum(HrEnum {
                 name: HrBytes::from(e.name().to_vec()),
                 value: e.value(),
@@ -146,7 +167,7 @@ impl Into<Datum> for HrDatum {
             HrDatum::Bytes(b) => Datum::Bytes(b.into()),
             HrDatum::Dec(d) => Datum::Dec(d.parse().unwrap()),
             HrDatum::Time(t) => Datum::Time(Time(t.raw)),
-            HrDatum::Json(j) => Datum::Json(j.parse().unwrap()),
+            HrDatum::Json(j) => Datum::Json(j.0),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
             HrDatum::Set(s) => Datum::Set(Set::new(
                 // todo: this is currently ok since we always flatten it before encoding, where the `data` field is ignored
@@ -191,6 +212,9 @@ mod tests {
             // json
             Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
             Datum::Json(r#"["foo", "bar"]"#.parse().unwrap()),
+            Datum::Json(r#""foo""#.parse().unwrap()),
+            Datum::Json(r#"0.1010101010101010101010101010101010101010"#.parse().unwrap()),
+            Datum::Json(r#"18446744073709551615"#.parse().unwrap()),
             // primitive
             Datum::Max,
             Datum::Min,
