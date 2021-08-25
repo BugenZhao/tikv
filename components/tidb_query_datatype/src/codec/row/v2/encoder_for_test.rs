@@ -23,7 +23,7 @@ use crate::codec::{
     data_type::ScalarValue,
     mysql::{decimal::DecimalEncoder, json::JsonEncoder},
     table::flatten,
-    Datum, Error, Result,
+    Datum, Result,
 };
 
 use crate::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
@@ -159,7 +159,7 @@ pub trait RowEncoder: NumberEncoder {
         let mut value_wtr = vec![];
         for d in datums {
             let d = flatten(ctx, d)?;
-            value_wtr.write_datum(&d)?;
+            value_wtr.write_datum(ctx, &d)?;
             offset_wtr.write_offset(is_big, value_wtr.len())?;
         }
         self.write_bytes(&offset_wtr)?;
@@ -202,26 +202,19 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     #[inline]
     fn write_value(&mut self, ctx: &mut EvalContext, col: &Column) -> Result<()> {
         match &col.value {
-            ScalarValue::Int(Some(v)) if col.is_unsigned() => {
-                self.encode_u64(*v as u64).map_err(Error::from)
-            }
-            ScalarValue::Int(Some(v)) => self.encode_i64(*v).map_err(Error::from),
-            ScalarValue::Decimal(Some(v)) => {
-                let (prec, frac) = v.prec_and_frac();
-                self.write_decimal(v, prec, frac)?;
-                Ok(())
-            }
-            ScalarValue::Real(Some(v)) => self.write_f64(v.into_inner()).map_err(Error::from),
-            ScalarValue::Bytes(Some(v)) => self.write_bytes(v).map_err(Error::from),
-            ScalarValue::DateTime(Some(v)) => {
-                self.encode_u64(v.to_packed_u64(ctx)?).map_err(Error::from)
-            }
-            ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
-            ScalarValue::Json(Some(v)) => self.write_json(v.as_ref()),
-            ScalarValue::Enum(Some(e)) => self.encode_u64(e.value()).map_err(Error::from),
-            ScalarValue::Set(Some(s)) => self.encode_u64(s.value()).map_err(Error::from),
+            ScalarValue::Int(Some(v)) if col.is_unsigned() => self.encode_u64(*v as u64)?,
+            ScalarValue::Int(Some(v)) => self.encode_i64(*v)?,
+            ScalarValue::Decimal(Some(v)) => self.write_decimal_with_context(v, ctx).map(|_| ())?,
+            ScalarValue::Real(Some(v)) => self.write_f64(v.into_inner())?,
+            ScalarValue::Bytes(Some(v)) => self.write_bytes(v)?,
+            ScalarValue::DateTime(Some(v)) => self.encode_u64(v.to_packed_u64(ctx)?)?,
+            ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos())?,
+            ScalarValue::Json(Some(v)) => self.write_json(v.as_ref())?,
+            ScalarValue::Enum(Some(e)) => self.encode_u64(e.value())?,
+            ScalarValue::Set(Some(s)) => self.encode_u64(s.value())?,
             _ => unreachable!(),
         }
+        Ok(())
     }
 
     #[allow(clippy::match_overlapping_arm)]
@@ -252,19 +245,15 @@ pub trait DatumValueEncoder: DecimalEncoder + JsonEncoder {
     /// Encode datum, which previously written by `write_v2_as_datum`, into v2 row format.
     /// Caller must ensure that `datum` is flattened.
     #[inline]
-    fn write_datum(&mut self, datum: &Datum) -> Result<()> {
+    fn write_datum(&mut self, ctx: &mut EvalContext, datum: &Datum) -> Result<()> {
         match datum {
-            Datum::I64(i) => self.encode_i64(*i).map_err(Error::from),
-            Datum::U64(u) => self.encode_u64(*u).map_err(Error::from),
-            Datum::F64(f) => self.write_f64(*f).map_err(Error::from),
-            Datum::Dur(d) => self.encode_i64(d.to_nanos()).map_err(Error::from),
-            Datum::Bytes(b) => self.write_bytes(&b).map_err(Error::from),
-            Datum::Dec(d) => {
-                let (prec, frac) = d.prec_and_frac();
-                self.write_decimal(&d, prec, frac)?;
-                Ok(())
-            }
-            Datum::Json(j) => self.write_json(j.as_ref()),
+            Datum::I64(i) => self.encode_i64(*i)?,
+            Datum::U64(u) => self.encode_u64(*u)?,
+            Datum::F64(f) => self.write_f64(*f)?,
+            Datum::Dur(d) => self.encode_i64(d.to_nanos())?,
+            Datum::Bytes(b) => self.write_bytes(&b)?,
+            Datum::Dec(d) => self.write_decimal_with_context(d, ctx).map(|_| ())?,
+            Datum::Json(j) => self.write_json(j.as_ref())?,
             // `write_v2_as_datum` won't write these datum so it is okay to ignore them
             Datum::Null
             | Datum::Time(_)
@@ -273,6 +262,7 @@ pub trait DatumValueEncoder: DecimalEncoder + JsonEncoder {
             | Datum::Min
             | Datum::Max => unreachable!("datum {:?} is not flattened", datum),
         }
+        Ok(())
     }
 
     #[allow(clippy::match_overlapping_arm)]

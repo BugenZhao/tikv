@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{
-    from_text,
+    eval_context, from_text,
     hr_datum::HrDatum,
     hr_key::HrDataKey,
     hr_kv::HrKv,
@@ -11,25 +11,23 @@ use crate::{
 };
 use datum::DatumDecoder;
 use std::collections::HashMap;
+use tidb_query_datatype::codec::{datum, row, table, Result as CodecResult};
 use tidb_query_datatype::codec::{
     row::v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
     table::unflatten,
-};
-use tidb_query_datatype::{
-    codec::{datum, row, table, Result as CodecResult},
-    expr::EvalContext,
 };
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
 pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<String> {
-    let ctx = &mut EvalContext::default();
+    let ctx = &mut eval_context();
     let columns_info = table.get_columns();
     let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
         .iter()
         .map(|ci| (ci.get_column_id(), ci))
         .collect();
 
+    // let raw = val.to_vec();
     let value = match val.get(0) {
         Some(&row::v2::CODEC_VERSION) => {
             let row = RowSlice::from_bytes(val)?;
@@ -54,6 +52,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 non_null_ids,
                 null_ids: row.null_ids(),
                 datums: hr_datums,
+                // raw,
             };
             HrValue::V2(row_v2)
         }
@@ -61,7 +60,11 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
             let mut data = val;
             let (ids, datums) = table::decode_row_vec(&mut data, ctx, &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
-            let row_v1 = RowV1 { ids, datums };
+            let row_v1 = RowV1 {
+                ids,
+                datums,
+                // raw
+            };
             HrValue::V1(row_v1)
         }
         None => HrValue::V1(Default::default()),
@@ -73,12 +76,12 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
 }
 
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
-    let ctx = &mut EvalContext::default();
+    let ctx = &mut eval_context();
     let HrKv { key, value } = from_text(line);
 
     match value {
         HrValue::V1(row) => {
-            let RowV1 { ids, datums } = row;
+            let RowV1 { ids, datums, .. } = row;
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let value = table::encode_row(ctx, datums, &ids).unwrap();
@@ -90,6 +93,7 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
                 non_null_ids,
                 null_ids,
                 datums,
+                ..
             } = row;
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
@@ -205,15 +209,10 @@ mod tests {
         let bytes = || b"abc".to_vec();
         let dec = || Decimal::from_str("233.345678").unwrap();
         let json = || Json::from_str(r#"{"name": "John"}"#).unwrap();
-        let dur = || Duration::parse(&mut EvalContext::default(), "23:23:23.666", 2).unwrap();
+        let dur = || Duration::parse(&mut eval_context(), "23:23:23.666", 2).unwrap();
         let time = || {
-            DateTime::parse_datetime(
-                &mut EvalContext::default(),
-                "2021-08-12 12:34:56.789",
-                3,
-                false,
-            )
-            .unwrap()
+            DateTime::parse_datetime(&mut eval_context(), "2021-08-12 12:34:56.789", 3, false)
+                .unwrap()
         };
         let enum_ = || Enum::parse_value(2, &enum_elems);
         let set = || Set::parse_value(0b11, &set_elems);
@@ -266,22 +265,19 @@ mod tests {
 
     #[test]
     fn test_v1() {
+        let ctx = &mut eval_context();
+
         let (key, cols_v1, row, _, table_info) = table();
         let col_ids = row.iter().map(|p| *p.0).collect::<Vec<_>>();
         let col_values = row.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
 
-        let val = encode_row(&mut EvalContext::default(), col_values.clone(), &col_ids).unwrap();
+        let val = encode_row(ctx, col_values.clone(), &col_ids).unwrap();
 
         let text = kv_to_text(&key, &val, &table_info).unwrap();
         println!("{}", text);
 
         let (restored_key, restored_val) = text_to_kv(&text, &table_info);
-        let restored_row = decode_row(
-            &mut restored_val.as_slice(),
-            &mut EvalContext::default(),
-            &cols_v1,
-        )
-        .unwrap();
+        let restored_row = decode_row(&mut restored_val.as_slice(), ctx, &cols_v1).unwrap();
         println!("{:?}", restored_row);
 
         assert_eq!(restored_key, key);
@@ -292,12 +288,13 @@ mod tests {
     #[test]
     fn test_v2() {
         use v2::encoder_for_test::RowEncoder;
+        let ctx = &mut eval_context();
 
         let (key, _, _, cols_v2, table_info) = table();
 
         let val = {
             let mut buf = vec![];
-            buf.write_row(&mut EvalContext::default(), cols_v2).unwrap();
+            buf.write_row(ctx, cols_v2).unwrap();
             buf
         };
 

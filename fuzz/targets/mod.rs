@@ -113,7 +113,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<()> {
         let _ = lhs.abs();
         let _ = lhs.ceil();
         let _ = lhs.floor();
-        let _ = lhs.prec_and_frac();
+        let _ = lhs.least_prec_and_frac();
 
         let mode = cursor.read_as_decimal_round_mode()?;
         let frac = cursor.read_as_i8()?;

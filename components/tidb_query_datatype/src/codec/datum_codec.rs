@@ -257,7 +257,7 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
     fn write_datum_decimal(&mut self, val: &Decimal) -> Result<()> {
         self.write_u8(datum::DECIMAL_FLAG)?;
         // FIXME: prec and frac should come from field type?
-        let (prec, frac) = val.prec_and_frac();
+        let (prec, frac) = val.least_prec_and_frac();
         self.write_datum_payload_decimal(val, prec, frac)?;
         Ok(())
     }

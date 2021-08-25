@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use tidb_query_datatype::codec::data_type::{Duration, Enum, Json, Set};
+use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::expr::EvalContext;
 use tikv_util::buffer_vec::BufferVec;
+
+use crate::eval_context;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrDuration {
@@ -23,6 +24,32 @@ pub struct HrDuration {
 pub enum HrBytes {
     Utf8(String),
     Raw(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HrDecimal {
+    #[serde(rename = "v")]
+    value: String,
+    #[serde(rename = "p")]
+    prec: u8,
+    #[serde(rename = "f")]
+    frac: u8,
+}
+
+impl From<Decimal> for HrDecimal {
+    fn from(d: Decimal) -> Self {
+        let (prec, frac) = d.preferred_prec_and_frac();
+        let value = d.to_string();
+        Self { value, prec, frac }
+    }
+}
+
+impl Into<Decimal> for HrDecimal {
+    fn into(self) -> Decimal {
+        let mut d = self.value.parse::<Decimal>().unwrap();
+        d.set_preferred_prec_and_frac(Some((self.prec, self.frac)));
+        d
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +132,7 @@ pub enum HrDatum {
     #[serde(rename = "b")]
     Bytes(HrBytes),
     #[serde(rename = "d")]
-    Dec(String),
+    Dec(HrDecimal),
     #[serde(rename = "t")]
     Time(HrTime),
     #[serde(rename = "j")]
@@ -136,7 +163,7 @@ impl From<Datum> for HrDatum {
                 fsp: d.fsp(),
             }),
             Datum::Bytes(v) => Self::Bytes(HrBytes::from(v)),
-            Datum::Dec(d) => Self::Dec(d.to_string()),
+            Datum::Dec(d) => Self::Dec(d.into()),
             Datum::Time(t) => Self::Time(HrTime {
                 value: t.to_string(),
                 raw: t.0,
@@ -158,7 +185,7 @@ impl From<Datum> for HrDatum {
 
 impl Into<Datum> for HrDatum {
     fn into(self) -> Datum {
-        let ctx = &mut EvalContext::default();
+        let ctx = &mut eval_context();
 
         match self {
             HrDatum::Null => Datum::Null,
@@ -167,7 +194,7 @@ impl Into<Datum> for HrDatum {
             HrDatum::F64(v) => Datum::F64(v),
             HrDatum::Dur(d) => Datum::Dur(Duration::parse(ctx, &d.value, d.fsp as i8).unwrap()),
             HrDatum::Bytes(b) => Datum::Bytes(b.into()),
-            HrDatum::Dec(d) => Datum::Dec(d.parse().unwrap()),
+            HrDatum::Dec(d) => Datum::Dec(d.into()),
             HrDatum::Time(t) => Datum::Time(Time(t.raw)),
             HrDatum::Json(j) => Datum::Json(j.0),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
@@ -184,14 +211,90 @@ impl Into<Datum> for HrDatum {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::codec::table::flatten;
+    use tidb_query_datatype::codec::datum::DECIMAL_FLAG;
+    use tidb_query_datatype::codec::mysql::{DecimalDecoder, DecimalEncoder};
+    use tidb_query_datatype::codec::{data_type::Decimal, table::flatten};
 
     use super::*;
     use crate::{from_text, to_text};
 
     #[test]
+    fn test_decimal_playground() {
+        use tidb_query_datatype::codec::mysql::{DecimalDecoder, DecimalEncoder};
+        {
+            let data = vec![5, 4, 129, 30, 22];
+            let dec = data.as_slice().read_decimal();
+            let str = dec.as_ref().map(|d| d.to_string());
+            println!("{:?} {:?}", dec, str);
+        }
+        {
+            let data = vec![6, 4, 129, 30, 22];
+            let dec = data.as_slice().read_decimal();
+            let str = dec.as_ref().map(|d| d.to_string());
+            println!("{:?} {:?}", dec, str);
+            let dec = dec.unwrap();
+            let (prec, frac) = dec.least_prec_and_frac();
+
+            let mut new_data = vec![];
+            new_data.write_decimal(&dec, prec, frac).unwrap();
+            println!("{:?}", new_data);
+
+            let mut new_data_64 = vec![];
+            new_data_64.write_decimal(&dec, 6, 4).unwrap();
+            println!("{:?}", new_data_64);
+        }
+        {
+            let dec_strs = [
+                "0.", ".0", "0.0", "0", ".1", "0.1", "1.0", "1.", "1", "0.8851", "-0.8851",
+                "1.8851", "01.8851", "11.8851",
+            ];
+            for src_str in dec_strs {
+                let dec: Decimal = src_str.parse().unwrap();
+                let str = dec.to_string();
+                println!("src: {}, to: {}, {:?}", src_str, str, dec);
+                let (prec, frac) = dec.least_prec_and_frac();
+                println!("prec {}, frac {}", prec, frac);
+                let mut new_data = vec![];
+                new_data.write_decimal(&dec, prec, frac).unwrap();
+                println!("{:?}", new_data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal() {
+        use tidb_query_datatype::codec::datum::{DatumDecoder, DatumEncoder};
+        let ctx = &mut eval_context();
+
+        let dec = "1.7702".parse::<Decimal>().unwrap();
+        let raws = (6..=13)
+            .map(|prec| {
+                let mut buf = vec![DECIMAL_FLAG];
+                buf.write_decimal(&dec, prec, 4).unwrap();
+                buf
+            })
+            .collect::<Vec<_>>();
+
+        for raw in raws {
+            let datum = raw.as_slice().read_datum().unwrap();
+            match &datum {
+                Datum::Dec(dec) => {
+                    println!("{:?}, {}", dec, dec);
+                }
+                _ => unreachable!(),
+            }
+
+            let hr: HrDatum = datum.into();
+            let dec_datum: Datum = hr.into();
+            let mut enc = vec![];
+            enc.write_datum(ctx, &[dec_datum], true).unwrap();
+            assert_eq!(raw, enc);
+        }
+    }
+
+    #[test]
     fn test_it_works() {
-        let ctx = &mut EvalContext::default();
+        let ctx = &mut eval_context();
 
         let datums = [
             // bytes
@@ -255,7 +358,6 @@ mod tests {
 
             use tidb_query_datatype::codec::datum::DatumEncoder;
 
-            let ctx = &mut EvalContext::default();
             let mut v_datum = vec![];
             let flatten_datum = flatten(ctx, datum).unwrap();
             v_datum.write_datum(ctx, &[flatten_datum], true).unwrap();
