@@ -27,7 +27,6 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         .map(|ci| (ci.get_column_id(), ci))
         .collect();
 
-    // let raw = val.to_vec();
     let value = match val.get(0) {
         Some(&row::v2::CODEC_VERSION) => {
             let row = RowSlice::from_bytes(val)?;
@@ -52,7 +51,6 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
                 non_null_ids,
                 null_ids: row.null_ids(),
                 datums: hr_datums,
-                // raw,
             };
             HrValue::V2(row_v2)
         }
