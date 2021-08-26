@@ -4726,7 +4726,7 @@ mod tests {
                 mut truncate_as_warning,
             ) in cs.clone()
             {
-                let (origin_flen, origin_decimal) = base_res.least_prec_and_frac();
+                let (origin_flen, origin_decimal) = base_res.prec_and_frac();
 
                 // some test case in `cs` is just for unsigned result or signed result,
                 // some is just for negative/positive base_res

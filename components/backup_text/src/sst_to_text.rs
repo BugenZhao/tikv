@@ -60,11 +60,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
             let mut data = val;
             let (ids, datums) = table::decode_row_vec(&mut data, ctx, &column_id_info)?;
             let datums = datums.into_iter().map(HrDatum::from).collect();
-            let row_v1 = RowV1 {
-                ids,
-                datums,
-                // raw
-            };
+            let row_v1 = RowV1 { ids, datums };
             HrValue::V1(row_v1)
         }
         None => HrValue::V1(Default::default()),
@@ -80,21 +76,18 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
     let HrKv { key, value } = from_text(line);
 
     match value {
-        HrValue::V1(row) => {
-            let RowV1 { ids, datums, .. } = row;
+        HrValue::V1(RowV1 { ids, datums }) => {
             let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let value = table::encode_row(ctx, datums, &ids).unwrap();
             (key.into_encoded(), value)
         }
-        HrValue::V2(row) => {
-            let RowV2 {
-                is_big,
-                non_null_ids,
-                null_ids,
-                datums,
-                ..
-            } = row;
+        HrValue::V2(RowV2 {
+            is_big,
+            non_null_ids,
+            null_ids,
+            datums,
+        }) => {
             let datums = datums.into_iter().map(|d| d.into()).collect();
             let mut buf = vec![];
             buf.write_row_with_datum(ctx, is_big, non_null_ids, null_ids, datums)

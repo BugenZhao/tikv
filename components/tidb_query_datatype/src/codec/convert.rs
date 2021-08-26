@@ -624,7 +624,7 @@ pub fn produce_dec_with_specified_tp(
         if flen < decimal {
             return Err(Error::m_bigger_than_d(""));
         }
-        let (prec, frac) = dec.least_prec_and_frac();
+        let (prec, frac) = dec.prec_and_frac();
         let (prec, frac) = (prec as isize, frac as isize);
         if !dec.is_zero() && prec - frac > flen - decimal {
             // select (cast 111 as decimal(1)) causes a warning in MySQL.
@@ -2612,7 +2612,7 @@ mod tests {
         ) in cs
         {
             // check origin_flen and origin_decimal
-            let (f, d) = input.least_prec_and_frac();
+            let (f, d) = input.prec_and_frac();
             let log = format!(
                 "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
                 input, origin_flen, origin_decimal, f, d

@@ -211,59 +211,18 @@ impl Into<Datum> for HrDatum {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::codec::datum::DECIMAL_FLAG;
-    use tidb_query_datatype::codec::mysql::{DecimalDecoder, DecimalEncoder};
-    use tidb_query_datatype::codec::{data_type::Decimal, table::flatten};
+    use tidb_query_datatype::codec::table::flatten;
 
     use super::*;
     use crate::{from_text, to_text};
 
     #[test]
-    fn test_decimal_playground() {
-        use tidb_query_datatype::codec::mysql::{DecimalDecoder, DecimalEncoder};
-        {
-            let data = vec![5, 4, 129, 30, 22];
-            let dec = data.as_slice().read_decimal();
-            let str = dec.as_ref().map(|d| d.to_string());
-            println!("{:?} {:?}", dec, str);
-        }
-        {
-            let data = vec![6, 4, 129, 30, 22];
-            let dec = data.as_slice().read_decimal();
-            let str = dec.as_ref().map(|d| d.to_string());
-            println!("{:?} {:?}", dec, str);
-            let dec = dec.unwrap();
-            let (prec, frac) = dec.least_prec_and_frac();
-
-            let mut new_data = vec![];
-            new_data.write_decimal(&dec, prec, frac).unwrap();
-            println!("{:?}", new_data);
-
-            let mut new_data_64 = vec![];
-            new_data_64.write_decimal(&dec, 6, 4).unwrap();
-            println!("{:?}", new_data_64);
-        }
-        {
-            let dec_strs = [
-                "0.", ".0", "0.0", "0", ".1", "0.1", "1.0", "1.", "1", "0.8851", "-0.8851",
-                "1.8851", "01.8851", "11.8851",
-            ];
-            for src_str in dec_strs {
-                let dec: Decimal = src_str.parse().unwrap();
-                let str = dec.to_string();
-                println!("src: {}, to: {}, {:?}", src_str, str, dec);
-                let (prec, frac) = dec.least_prec_and_frac();
-                println!("prec {}, frac {}", prec, frac);
-                let mut new_data = vec![];
-                new_data.write_decimal(&dec, prec, frac).unwrap();
-                println!("{:?}", new_data);
-            }
-        }
-    }
-
-    #[test]
-    fn test_decimal() {
+    fn test_decimal_different_prec_frac() {
+        use tidb_query_datatype::codec::data_type::Decimal;
+        use tidb_query_datatype::codec::datum::DECIMAL_FLAG;
         use tidb_query_datatype::codec::datum::{DatumDecoder, DatumEncoder};
+        use tidb_query_datatype::codec::mysql::DecimalEncoder;
+
         let ctx = &mut eval_context();
 
         let dec = "1.7702".parse::<Decimal>().unwrap();
@@ -293,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_it_works() {
+    fn test_datum() {
         let ctx = &mut eval_context();
 
         let datums = [

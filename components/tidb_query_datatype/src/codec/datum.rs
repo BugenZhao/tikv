@@ -1165,7 +1165,7 @@ mod tests {
             | (&Datum::Time(_), &Datum::Time(_))
             | (&Datum::Json(_), &Datum::Json(_)) => true,
             (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => {
-                d1.least_prec_and_frac() == d2.least_prec_and_frac()
+                d1.prec_and_frac() == d2.prec_and_frac()
             }
             _ => false,
         }

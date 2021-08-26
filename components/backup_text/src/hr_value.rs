@@ -10,7 +10,6 @@ pub struct RowV1 {
     pub ids: Vec<u32>,
     #[serde(rename = "d")]
     pub datums: Vec<HrDatum>,
-    // pub raw: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +22,6 @@ pub struct RowV2 {
     pub null_ids: Vec<u32>,
     #[serde(rename = "d")]
     pub datums: Vec<HrDatum>,
-    // pub raw: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

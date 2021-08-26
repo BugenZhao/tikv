@@ -1022,7 +1022,7 @@ impl Decimal {
     }
 
     /// Get the least precision and fraction count to encode this decimal completely.
-    pub fn least_prec_and_frac(&self) -> (u8, u8) {
+    pub fn prec_and_frac(&self) -> (u8, u8) {
         let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
         let prec = int_cnt + self.frac_cnt;
         if prec == 0 {
@@ -1033,9 +1033,9 @@ impl Decimal {
     }
 
     /// Get the preferred precision and fraction count to encode this decimal.
-    /// If it cannot hold, return `least_prec_and_frac()` instead.
+    /// If it cannot hold, return least values from `prec_and_frac()` instead.
     pub fn preferred_prec_and_frac(&self) -> (u8, u8) {
-        let least = self.least_prec_and_frac();
+        let least = self.prec_and_frac();
 
         self.extra
             .preferred_prec_and_frac
@@ -1129,7 +1129,7 @@ impl Decimal {
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
-        let (prec, frac) = self.least_prec_and_frac();
+        let (prec, frac) = self.prec_and_frac();
         if flen < decimal {
             return Err(Error::m_bigger_than_d(""));
         }
@@ -1704,7 +1704,7 @@ impl Decimal {
     ///
     /// see also `encode_decimal`.
     pub fn approximate_encoded_size(&self) -> usize {
-        let (prec, frac) = self.least_prec_and_frac();
+        let (prec, frac) = self.prec_and_frac();
         dec_encoded_len(&[prec, frac]).unwrap_or(3)
     }
 
@@ -2011,7 +2011,7 @@ pub trait DecimalEncoder: NumberEncoder {
         let (prec, frac) = if use_preferred {
             d.preferred_prec_and_frac()
         } else {
-            d.least_prec_and_frac()
+            d.prec_and_frac()
         };
         self.write_decimal(d, prec, frac)
     }
