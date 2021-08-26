@@ -993,9 +993,7 @@ pub trait DatumEncoder:
                 }
                 Datum::Dec(ref d) => {
                     self.write_u8(DECIMAL_FLAG)?;
-                    // FIXME: prec and frac should come from field type?
-                    let (prec, frac) = d.prec_and_frac();
-                    self.write_decimal(d, prec, frac)?;
+                    self.write_decimal_with_context(d, ctx)?;
                 }
                 Datum::Json(ref j) => {
                     self.write_u8(JSON_FLAG)?;
@@ -1166,7 +1164,9 @@ mod tests {
             | (&Datum::Null, &Datum::Null)
             | (&Datum::Time(_), &Datum::Time(_))
             | (&Datum::Json(_), &Datum::Json(_)) => true,
-            (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
+            (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => {
+                d1.prec_and_frac() == d2.prec_and_frac()
+            }
             _ => false,
         }
     }

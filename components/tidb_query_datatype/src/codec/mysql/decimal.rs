@@ -7,7 +7,7 @@ use std::intrinsics::copy_nonoverlapping;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
-use std::{cmp, i32, i64, mem, u32, u64};
+use std::{cmp, i32, i64, mem, ptr, u32, u64};
 
 use codec::prelude::*;
 use tikv_util::escape;
@@ -884,10 +884,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     res.map(|_| dec)
 }
 
-/// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
+/// `DECIMAL_STRUCT_SIZE` is the struct size of `Decimal` WITHOUT EXTRA FIELDS,
+/// which conforms to TiDB and is used for chunk encoding.
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
-
-const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
 
 /// `Decimal` represents a decimal value.
 #[repr(C)]
@@ -907,6 +906,10 @@ pub struct Decimal {
     /// An array of u32 words.
     /// A word is an u32 value can hold 9 digits.(0 <= word < wordBase)
     word_buf: [u32; 9],
+
+    // Extra fields that only exists in TiKV
+    /// Preferred precision to encode, only used when flag is set in `EvalConfig`.
+    preferred_prec: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -953,6 +956,7 @@ impl Decimal {
             result_frac_cnt: 0,
             negative,
             word_buf: [0; 9],
+            preferred_prec: None,
         }
     }
 
@@ -1015,6 +1019,14 @@ impl Decimal {
         } else {
             (prec, self.frac_cnt)
         }
+    }
+
+    /// Get the preferred precision and fraction count to encode this decimal.
+    /// If it cannot hold, return least values from `prec_and_frac()` instead.
+    pub fn preferred_prec_and_frac(&self) -> (u8, u8) {
+        let (prec, frac) = self.prec_and_frac();
+        let prec = self.preferred_prec.unwrap_or_default().max(prec);
+        (prec, frac)
     }
 
     /// `digit_bounds` returns bounds of decimal digits in the number.
@@ -1696,6 +1708,11 @@ impl Decimal {
         let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
         self.word_buf[0..len as usize].iter().all(|&x| x == 0)
     }
+
+    /// Set the decimal's preferred prec.
+    pub fn set_preferred_prec(&mut self, preferred_prec: Option<u8>) {
+        self.preferred_prec = preferred_prec;
+    }
 }
 
 macro_rules! enable_conv_for_int {
@@ -1967,6 +1984,24 @@ macro_rules! write_word {
 }
 
 pub trait DecimalEncoder: NumberEncoder {
+    fn write_decimal_with_context(
+        &mut self,
+        d: &Decimal,
+        ctx: &mut EvalContext,
+    ) -> Result<Res<()>> {
+        use crate::expr::EncodingFlag;
+        let use_preferred = ctx
+            .cfg
+            .encoding_flag
+            .contains(EncodingFlag::DECIMAL_PREFERRED_PREC_FRAC);
+        let (prec, frac) = if use_preferred {
+            d.preferred_prec_and_frac()
+        } else {
+            d.prec_and_frac()
+        };
+        self.write_decimal(d, prec, frac)
+    }
+
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn write_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
@@ -2185,6 +2220,7 @@ pub trait DecimalDecoder: NumberDecoder {
             return Err(box_err!("decoding decimal failed: {:?}", res));
         }
         let mut d = Decimal::new(int_cnt, frac_cnt, mask != 0);
+        d.preferred_prec = Some(prec);
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
         let mut is_first = true;
@@ -2242,6 +2278,7 @@ pub trait DecimalDecoder: NumberDecoder {
             let mut d = mem::MaybeUninit::<Decimal>::uninit();
             let p = d.as_mut_ptr() as *mut u8;
             copy_nonoverlapping(buf.as_ptr(), p, DECIMAL_STRUCT_SIZE);
+            ptr::addr_of_mut!((*d.as_mut_ptr()).preferred_prec).write(None);
             d.assume_init()
         };
         Ok(d)

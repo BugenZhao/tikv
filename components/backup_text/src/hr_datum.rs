@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use tidb_query_datatype::codec::data_type::{Duration, Enum, Set};
+use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::expr::EvalContext;
 use tikv_util::buffer_vec::BufferVec;
+
+use crate::eval_context;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrDuration {
@@ -26,11 +27,58 @@ pub enum HrBytes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HrDecimal {
+    #[serde(rename = "v")]
+    value: String,
+    #[serde(rename = "p")]
+    prec: u8,
+}
+
+impl From<Decimal> for HrDecimal {
+    fn from(d: Decimal) -> Self {
+        let (prec, _) = d.preferred_prec_and_frac();
+        let value = d.to_string();
+        Self { value, prec }
+    }
+}
+
+impl Into<Decimal> for HrDecimal {
+    fn into(self) -> Decimal {
+        let mut d = self.value.parse::<Decimal>().unwrap();
+        d.set_preferred_prec(Some(self.prec));
+        d
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrTime {
     #[serde(rename = "v")]
     value: String,
     #[serde(rename = "r")]
     raw: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HrJson(pub Json);
+
+impl Serialize for HrJson {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for HrJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // todo: `serde_json` has a recursion depth limit of 128 on deserializing and it's not safe to turn it off.
+        // while tidb allows depth up to 10000, this might be problematic on deeply nested json documents.
+        Json::deserialize(deserializer).map(HrJson)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,11 +130,11 @@ pub enum HrDatum {
     #[serde(rename = "b")]
     Bytes(HrBytes),
     #[serde(rename = "d")]
-    Dec(String),
+    Dec(HrDecimal),
     #[serde(rename = "t")]
     Time(HrTime),
     #[serde(rename = "j")]
-    Json(String),
+    Json(HrJson),
     #[serde(rename = "e")]
     Enum(HrEnum),
     #[serde(rename = "s")]
@@ -113,12 +161,12 @@ impl From<Datum> for HrDatum {
                 fsp: d.fsp(),
             }),
             Datum::Bytes(v) => Self::Bytes(HrBytes::from(v)),
-            Datum::Dec(d) => Self::Dec(d.to_string()),
+            Datum::Dec(d) => Self::Dec(d.into()),
             Datum::Time(t) => Self::Time(HrTime {
                 value: t.to_string(),
                 raw: t.0,
             }),
-            Datum::Json(j) => Self::Json(j.to_string()),
+            Datum::Json(j) => Self::Json(HrJson(j)),
             Datum::Enum(e) => Self::Enum(HrEnum {
                 name: HrBytes::from(e.name().to_vec()),
                 value: e.value(),
@@ -135,7 +183,7 @@ impl From<Datum> for HrDatum {
 
 impl Into<Datum> for HrDatum {
     fn into(self) -> Datum {
-        let ctx = &mut EvalContext::default();
+        let ctx = &mut eval_context();
 
         match self {
             HrDatum::Null => Datum::Null,
@@ -144,9 +192,9 @@ impl Into<Datum> for HrDatum {
             HrDatum::F64(v) => Datum::F64(v),
             HrDatum::Dur(d) => Datum::Dur(Duration::parse(ctx, &d.value, d.fsp as i8).unwrap()),
             HrDatum::Bytes(b) => Datum::Bytes(b.into()),
-            HrDatum::Dec(d) => Datum::Dec(d.parse().unwrap()),
+            HrDatum::Dec(d) => Datum::Dec(d.into()),
             HrDatum::Time(t) => Datum::Time(Time(t.raw)),
-            HrDatum::Json(j) => Datum::Json(j.parse().unwrap()),
+            HrDatum::Json(j) => Datum::Json(j.0),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
             HrDatum::Set(s) => Datum::Set(Set::new(
                 // todo: this is currently ok since we always flatten it before encoding, where the `data` field is ignored
@@ -161,12 +209,49 @@ impl Into<Datum> for HrDatum {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::codec::table::flatten;
+
     use super::*;
     use crate::{from_text, to_text};
 
     #[test]
-    fn test_it_works() {
-        let ctx = &mut EvalContext::default();
+    fn test_decimal_different_prec_frac() {
+        use tidb_query_datatype::codec::data_type::Decimal;
+        use tidb_query_datatype::codec::datum::DECIMAL_FLAG;
+        use tidb_query_datatype::codec::datum::{DatumDecoder, DatumEncoder};
+        use tidb_query_datatype::codec::mysql::DecimalEncoder;
+
+        let ctx = &mut eval_context();
+
+        let dec = "1.7702".parse::<Decimal>().unwrap();
+        let raws = (6..=13)
+            .map(|prec| {
+                let mut buf = vec![DECIMAL_FLAG];
+                buf.write_decimal(&dec, prec, 4).unwrap();
+                buf
+            })
+            .collect::<Vec<_>>();
+
+        for raw in raws {
+            let datum = raw.as_slice().read_datum().unwrap();
+            match &datum {
+                Datum::Dec(dec) => {
+                    println!("{:?}, {}", dec, dec);
+                }
+                _ => unreachable!(),
+            }
+
+            let hr: HrDatum = datum.into();
+            let dec_datum: Datum = hr.into();
+            let mut enc = vec![];
+            enc.write_datum(ctx, &[dec_datum], true).unwrap();
+            assert_eq!(raw, enc);
+        }
+    }
+
+    #[test]
+    fn test_datum() {
+        let ctx = &mut eval_context();
 
         let datums = [
             // bytes
@@ -175,6 +260,7 @@ mod tests {
             Datum::Bytes(b"\xf0\x28\x8c\x28".to_vec()),
             // decimal
             Datum::Dec("12345678987.654321".parse().unwrap()),
+            Datum::Dec("123.000".parse().unwrap()),
             Datum::Dec("123.0".parse().unwrap()),
             Datum::Dec("123".parse().unwrap()),
             // duration
@@ -184,11 +270,17 @@ mod tests {
             Datum::Enum(Enum::new(b"Foo".to_vec(), 1)),
             // numbers
             Datum::F64(3.1415926),
+            Datum::F64(9.8596765437597708567e-305),
+            Datum::F64(1.0142320547350045095e304),
             Datum::I64(31415926535898),
             Datum::U64(31415926535898),
             // json
             Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
             Datum::Json(r#"["foo", "bar"]"#.parse().unwrap()),
+            Datum::Json(r#""foo""#.parse().unwrap()),
+            Datum::Json(r#"0.1010101010101010101010101010101010101010"#.parse().unwrap()),
+            Datum::Json(r#"18446744073709551615"#.parse().unwrap()),
+            Datum::Json(Json::from_u64(18446744073709551615u64).unwrap()),
             // primitive
             Datum::Max,
             Datum::Min,
@@ -196,7 +288,10 @@ mod tests {
             // enum
             Datum::Enum(Enum::parse_value(2, &["bug".to_owned(), "gen".to_owned()])),
             // set
-            Datum::Set(Set::parse_value(0b11, &["bug".to_owned(), "gen".to_owned()])),
+            Datum::Set(Set::parse_value(
+                0b11,
+                &["bug".to_owned(), "gen".to_owned()],
+            )),
             // time
             Datum::Time(Time::parse_datetime(ctx, "2021-08-12 12:34:56.789", 3, false).unwrap()),
             Datum::Time(Time::parse_date(ctx, "2021-08-12").unwrap()),
@@ -207,12 +302,27 @@ mod tests {
             println!("{}", enc);
             let dec: Datum = from_text::<HrDatum>(&enc).into();
 
-            match (datum, dec) {
+            match (&datum, &dec) {
                 // only check u64 value for enum and set
-                (Datum::Enum(e), Datum::Enum(dec_e)) => assert_eq!(e.value(), dec_e.value()),
-                (Datum::Set(s), Datum::Set(dec_s)) => assert_eq!(s.value(), dec_s.value()),
-                (datum, dec) => assert_eq!(datum, dec),
+                (Datum::Enum(e), Datum::Enum(dec_e)) => {
+                    assert_eq!(e.value(), dec_e.value(), "encoded as {}", enc)
+                }
+                (Datum::Set(s), Datum::Set(dec_s)) => {
+                    assert_eq!(s.value(), dec_s.value(), "encoded as {}", enc)
+                }
+                (datum, dec) => assert_eq!(datum, dec, "encoded as {}", enc),
             }
+
+            use tidb_query_datatype::codec::datum::DatumEncoder;
+
+            let mut v_datum = vec![];
+            let flatten_datum = flatten(ctx, datum).unwrap();
+            v_datum.write_datum(ctx, &[flatten_datum], true).unwrap();
+
+            let mut v_dec = vec![];
+            let flatten_dec = flatten(ctx, dec).unwrap();
+            v_dec.write_datum(ctx, &[flatten_dec], true).unwrap();
+            assert_eq!(v_datum, v_dec);
         }
     }
 }

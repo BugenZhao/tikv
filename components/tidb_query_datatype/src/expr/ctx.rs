@@ -59,12 +59,23 @@ impl SqlMode {
     }
 }
 
+bitflags! {
+    /// `EncodingFlag` are flags used for datum encoding.
+    pub struct EncodingFlag: u64 {
+        /// `DECIMAL_PREFERRED_PREC_FRAC` indicates if preferred precision and fraction count is used
+        /// when encoding decimals, instead of minimal prec and frac (by default).
+        const DECIMAL_PREFERRED_PREC_FRAC = 1 << 0;
+    }
+}
+
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
     pub tz: Tz,
+    /// flags used for datum encoding
+    pub encoding_flag: EncodingFlag,
     pub flag: Flag,
     // TODO: max warning count is not really a EvalConfig. Instead it is a ExecutionConfig, because
     // warning is a executor stuff instead of a evaluation stuff.
@@ -102,6 +113,7 @@ impl EvalConfig {
     pub fn new() -> Self {
         Self {
             tz: Tz::utc(),
+            encoding_flag: EncodingFlag::empty(),
             flag: Flag::empty(),
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),

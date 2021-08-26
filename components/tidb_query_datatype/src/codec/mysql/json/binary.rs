@@ -124,7 +124,9 @@ mod tests {
             (r#"["d1","d2"]"#, JsonType::Array),
             (r#"-3"#, JsonType::I64),
             (r#"3"#, JsonType::I64),
-            (r#"18446744073709551615"#, JsonType::Double),
+            (r#"9223372036854775807"#, JsonType::I64), // i64::MAX
+            (r#"9223372036854775808"#, JsonType::U64), // i64::MAX + 1
+            (r#"18446744073709551615"#, JsonType::U64),
             (r#"3.0"#, JsonType::Double),
             (r#"null"#, JsonType::Literal),
             (r#"true"#, JsonType::Literal),

@@ -8,7 +8,10 @@ mod hr_write;
 pub mod rwer;
 pub mod sst_to_text;
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
+use tidb_query_datatype::expr::{EncodingFlag, EvalConfig, EvalContext};
 
 pub fn to_text<T: Serialize>(src: T) -> String {
     serde_json::to_string(&src).unwrap()
@@ -16,4 +19,11 @@ pub fn to_text<T: Serialize>(src: T) -> String {
 
 pub fn from_text<'a, T: Deserialize<'a>>(src: &'a str) -> T {
     serde_json::from_str(src).unwrap()
+}
+
+fn eval_context() -> EvalContext {
+    let mut cfg = EvalConfig::default();
+    cfg.encoding_flag
+        .set(EncodingFlag::DECIMAL_PREFERRED_PREC_FRAC, true);
+    EvalContext::new(Arc::new(cfg))
 }

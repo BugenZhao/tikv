@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::{codec::table::*, expr::EvalContext};
+use tidb_query_datatype::{codec::table::*};
 use txn_types::{Key, TimeStamp};
 
-use crate::hr_datum::HrDatum;
+use crate::{eval_context, hr_datum::HrDatum};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -66,7 +66,7 @@ impl HrDataKey {
             HrHandle::Common(datums) => {
                 let datums = datums.into_iter().map(HrDatum::into).collect::<Vec<_>>();
                 let handle =
-                    encode_common_handle_from_datums(&mut EvalContext::default(), &datums).unwrap();
+                    encode_common_handle_from_datums(&mut eval_context(), &datums).unwrap();
                 encode_row_key_with_common_handle(table_id, &handle)
             }
             HrHandle::Int(h) => encode_row_key(table_id, h),
@@ -116,8 +116,7 @@ mod tests {
     #[test]
     fn test_common_handle() {
         let datums = vec![Datum::Dec(1.into()), Datum::Bytes(b"hello".to_vec())];
-        let handle =
-            encode_common_handle_from_datums(&mut EvalContext::default(), &datums).unwrap();
+        let handle = encode_common_handle_from_datums(&mut eval_context(), &datums).unwrap();
         let hr_handle = HrHandle::from_encoded_common_handle(&handle);
         let decoded_datums: Vec<Datum> = match hr_handle {
             HrHandle::Common(datums) => datums.into_iter().map(HrDatum::into).collect(),
