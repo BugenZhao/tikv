@@ -884,21 +884,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
     res.map(|_| dec)
 }
 
-/// `DECIMAL_STRUCT_SIZE` is the struct size of `Decimal` WITHOUT `DecimalExtra`,
+/// `DECIMAL_STRUCT_SIZE` is the struct size of `Decimal` WITHOUT EXTRA FIELDS,
 /// which conforms to TiDB and is used for chunk encoding.
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
-
-const_assert_eq!(
-    DECIMAL_STRUCT_SIZE,
-    mem::size_of::<Decimal>() - mem::size_of::<DecimalExtra>()
-);
-
-#[repr(align(4))]
-#[derive(Clone, Debug, Copy, Default)]
-struct DecimalExtra {
-    /// Preferred precision and fraction count.
-    preferred_prec_and_frac: Option<(u8, u8)>,
-}
 
 /// `Decimal` represents a decimal value.
 #[repr(C)]
@@ -919,8 +907,9 @@ pub struct Decimal {
     /// A word is an u32 value can hold 9 digits.(0 <= word < wordBase)
     word_buf: [u32; 9],
 
-    /// Extra fields that only exists in TiKV
-    extra: DecimalExtra,
+    // Extra fields that only exists in TiKV
+    /// Preferred precision to encode, only used when flag is set in `EvalConfig`.
+    preferred_prec: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -967,7 +956,7 @@ impl Decimal {
             result_frac_cnt: 0,
             negative,
             word_buf: [0; 9],
-            extra: Default::default(),
+            preferred_prec: None,
         }
     }
 
@@ -1035,12 +1024,9 @@ impl Decimal {
     /// Get the preferred precision and fraction count to encode this decimal.
     /// If it cannot hold, return least values from `prec_and_frac()` instead.
     pub fn preferred_prec_and_frac(&self) -> (u8, u8) {
-        let least = self.prec_and_frac();
-
-        self.extra
-            .preferred_prec_and_frac
-            .filter(|p| p.0 >= least.0 && p.1 >= least.1)
-            .unwrap_or(least)
+        let (prec, frac) = self.prec_and_frac();
+        let prec = self.preferred_prec.unwrap_or_default().max(prec);
+        (prec, frac)
     }
 
     /// `digit_bounds` returns bounds of decimal digits in the number.
@@ -1723,9 +1709,9 @@ impl Decimal {
         self.word_buf[0..len as usize].iter().all(|&x| x == 0)
     }
 
-    /// Set the decimal's preferred prec and frac.
-    pub fn set_preferred_prec_and_frac(&mut self, preferred_prec_and_frac: Option<(u8, u8)>) {
-        self.extra.preferred_prec_and_frac = preferred_prec_and_frac;
+    /// Set the decimal's preferred prec.
+    pub fn set_preferred_prec(&mut self, preferred_prec: Option<u8>) {
+        self.preferred_prec = preferred_prec;
     }
 }
 
@@ -2234,7 +2220,7 @@ pub trait DecimalDecoder: NumberDecoder {
             return Err(box_err!("decoding decimal failed: {:?}", res));
         }
         let mut d = Decimal::new(int_cnt, frac_cnt, mask != 0);
-        d.extra.preferred_prec_and_frac = Some((prec, frac_cnt));
+        d.preferred_prec = Some(prec);
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
         let mut is_first = true;
@@ -2292,7 +2278,7 @@ pub trait DecimalDecoder: NumberDecoder {
             let mut d = mem::MaybeUninit::<Decimal>::uninit();
             let p = d.as_mut_ptr() as *mut u8;
             copy_nonoverlapping(buf.as_ptr(), p, DECIMAL_STRUCT_SIZE);
-            ptr::addr_of_mut!((*d.as_mut_ptr()).extra).write(DecimalExtra::default());
+            ptr::addr_of_mut!((*d.as_mut_ptr()).preferred_prec).write(None);
             d.assume_init()
         };
         Ok(d)

@@ -32,22 +32,20 @@ pub struct HrDecimal {
     value: String,
     #[serde(rename = "p")]
     prec: u8,
-    #[serde(rename = "f")]
-    frac: u8,
 }
 
 impl From<Decimal> for HrDecimal {
     fn from(d: Decimal) -> Self {
-        let (prec, frac) = d.preferred_prec_and_frac();
+        let (prec, _) = d.preferred_prec_and_frac();
         let value = d.to_string();
-        Self { value, prec, frac }
+        Self { value, prec }
     }
 }
 
 impl Into<Decimal> for HrDecimal {
     fn into(self) -> Decimal {
         let mut d = self.value.parse::<Decimal>().unwrap();
-        d.set_preferred_prec_and_frac(Some((self.prec, self.frac)));
+        d.set_preferred_prec(Some(self.prec));
         d
     }
 }
