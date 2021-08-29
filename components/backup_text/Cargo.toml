@@ -14,6 +14,7 @@ protobuf-codec = [
 ]
 
 [dependencies]
+codec = { path = "../codec", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 keys = { path = "../keys", default-features = false }

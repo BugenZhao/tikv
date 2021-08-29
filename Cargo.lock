@@ -255,6 +255,7 @@ dependencies = [
 name = "backup_text"
 version = "0.1.0"
 dependencies = [
+ "codec",
  "collections",
  "engine_rocks",
  "engine_traits",

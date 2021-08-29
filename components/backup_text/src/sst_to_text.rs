@@ -3,19 +3,15 @@
 use crate::{
     eval_context, from_text,
     hr_datum::HrDatum,
+    hr_index::HrIndex,
     hr_key::HrDataKey,
     hr_kv::HrKv,
     hr_value::{HrValue, RowV1, RowV2},
-    hr_write::{HrKvWrite, HrWrite},
-    to_text,
+    hr_write::{HrIndexKvWrite, HrKvWrite, HrWrite},
+    to_text, Result,
 };
-use datum::DatumDecoder;
 use std::collections::HashMap;
-use tidb_query_datatype::codec::{datum, row, table, Result as CodecResult};
-use tidb_query_datatype::codec::{
-    row::v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
-    table::unflatten,
-};
+use tidb_query_datatype::codec::{row, table, Result as CodecResult};
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::WriteRef;
 
@@ -28,32 +24,7 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
         .collect();
 
     let value = match val.get(0) {
-        Some(&row::v2::CODEC_VERSION) => {
-            let row = RowSlice::from_bytes(val)?;
-            let mut non_null_ids = Vec::with_capacity(row.values_num());
-            let mut hr_datums = Vec::with_capacity(columns_info.len());
-            for id in row.non_null_ids() {
-                if let Some(ci) = column_id_info.get(&(id as i64)) {
-                    let (start, offset) = row.search_in_non_null_ids(id as i64)?.unwrap();
-                    let raw_datum = {
-                        // encode with V1CompatibleEncoder and decode as v1 datum
-                        let mut buf = vec![];
-                        buf.write_v2_as_datum(&row.values()[start..offset], *ci)?;
-                        (&mut buf.as_slice()).read_datum()?
-                    };
-                    let datum = unflatten(ctx, raw_datum, *ci)?;
-                    non_null_ids.push(id);
-                    hr_datums.push(HrDatum::from(datum));
-                }
-            }
-            let row_v2 = RowV2 {
-                is_big: row.is_big(),
-                non_null_ids,
-                null_ids: row.null_ids(),
-                datums: hr_datums,
-            };
-            HrValue::V2(row_v2)
-        }
+        Some(&row::v2::CODEC_VERSION) => HrValue::V2(RowV2::from_bytes(ctx, val, &column_id_info)?),
         Some(_ /* v1 */) => {
             let mut data = val;
             let (ids, datums) = table::decode_row_vec(&mut data, ctx, &column_id_info)?;
@@ -69,6 +40,18 @@ pub fn kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> CodecResult<Stri
     Ok(to_text(HrKv { key, value }))
 }
 
+pub fn index_kv_to_text(key: &[u8], val: &[u8], table: &TableInfo) -> Result<String> {
+    let ctx = &mut eval_context();
+    let columns_info = table.get_columns();
+    let column_id_info: HashMap<i64, &'_ ColumnInfo, _> = columns_info
+        .iter()
+        .map(|ci| (ci.get_column_id(), ci))
+        .collect();
+    let key = HrIndex::decode_index_key(key)?;
+    let value = HrIndex::decode_index_value(val, ctx, &column_id_info)?;
+    Ok(to_text(HrIndex { key, value }))
+}
+
 pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
     let ctx = &mut eval_context();
     let HrKv { key, value } = from_text(line);
@@ -80,19 +63,16 @@ pub fn text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
             let value = table::encode_row(ctx, datums, &ids).unwrap();
             (key.into_encoded(), value)
         }
-        HrValue::V2(RowV2 {
-            is_big,
-            non_null_ids,
-            null_ids,
-            datums,
-        }) => {
-            let datums = datums.into_iter().map(|d| d.into()).collect();
-            let mut buf = vec![];
-            buf.write_row_with_datum(ctx, is_big, non_null_ids, null_ids, datums)
-                .unwrap();
-            (key.into_encoded(), buf)
-        }
+        HrValue::V2(row_v2) => (key.into_encoded(), row_v2.into_bytes(ctx).unwrap()),
     }
+}
+
+pub fn index_text_to_kv(line: &str, _table: &TableInfo) -> (Vec<u8>, Vec<u8>) {
+    let ctx = &mut eval_context();
+    let HrIndex { key, value } = from_text(line);
+    let key = HrIndex::encode_index_key(ctx, key).unwrap();
+    let value = HrIndex::encode_index_value(ctx, value).unwrap();
+    (key, value)
 }
 
 pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
@@ -107,6 +87,22 @@ pub fn write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKvWrite { key, value } = from_text(line);
     let value: WriteRef<'_> = value.into();
     (key.into_encoded(), value.to_bytes())
+}
+
+pub fn index_kv_to_write(key: &[u8], val: &[u8]) -> String {
+    let hr_write = HrIndexKvWrite {
+        key: HrIndex::decode_index_key(key).unwrap(),
+        value: HrWrite::from(WriteRef::parse(val).unwrap()),
+    };
+    to_text(hr_write)
+}
+
+pub fn index_write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
+    let ctx = &mut eval_context();
+    let HrIndexKvWrite { key, value } = from_text(line);
+    let key = HrIndex::encode_index_key(ctx, key).unwrap();
+    let value: WriteRef<'_> = value.into();
+    (key, value.to_bytes())
 }
 
 #[cfg(test)]

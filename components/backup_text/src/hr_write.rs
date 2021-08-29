@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::hr_index::HrIndexKey;
 use crate::hr_key::HrDataKey;
 use serde::{Deserialize, Serialize};
 use txn_types::{TimeStamp, WriteRef, WriteType};
@@ -8,6 +9,14 @@ use txn_types::{TimeStamp, WriteRef, WriteType};
 pub struct HrKvWrite {
     #[serde(rename = "k")]
     pub key: HrDataKey,
+    #[serde(rename = "v")]
+    pub value: HrWrite,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HrIndexKvWrite {
+    #[serde(rename = "k")]
+    pub key: HrIndexKey,
     #[serde(rename = "v")]
     pub value: HrWrite,
 }

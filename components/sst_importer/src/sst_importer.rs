@@ -526,13 +526,17 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
+        let origin_key = keys::origin_key(new_prefix);
         let mut text_reader = match range_start {
-            Bound::Unbounded => TextReader::new(path_str, table_info, meta.get_cf_name())?,
+            Bound::Unbounded => {
+                TextReader::new(path_str, table_info, meta.get_cf_name(), &origin_key)?
+            }
             Bound::Included(s) => TextReader::new_start_at(
                 path_str,
                 table_info,
                 meta.get_cf_name(),
                 SeekKey::Key(&keys::data_key(&s)),
+                &origin_key,
             )?,
             Bound::Excluded(_) => unreachable!(),
         };
