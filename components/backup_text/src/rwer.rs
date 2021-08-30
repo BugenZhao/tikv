@@ -4,10 +4,12 @@ use crate::sst_to_text::{
     index_kv_to_text, index_kv_to_write, index_text_to_kv, index_write_to_kv, kv_to_text,
     kv_to_write, text_to_kv, write_to_kv,
 };
-use crate::Result;
+use crate::{Error, Result};
 use engine_traits::{CfName, SeekKey, CF_DEFAULT, CF_WRITE};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Lines, Write};
+use std::str::FromStr;
+use std::string::ToString;
 use tidb_query_datatype::codec::table::{check_index_key, check_record_key};
 use tikv_util::error;
 use tipb::TableInfo;
@@ -35,6 +37,28 @@ impl DataType {
             Ok(DataType::Index)
         } else {
             Err(format!("unknown data type, key: {:?}", key).into())
+        }
+    }
+}
+
+impl ToString for DataType {
+    fn to_string(&self) -> String {
+        match self {
+            DataType::Record => "DataType::Record".to_owned(),
+            DataType::Index => "DataType::Index".to_owned(),
+        }
+    }
+}
+
+impl FromStr for DataType {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        if s.contains("DataType::Record") {
+            Ok(DataType::Record)
+        } else if s.contains("DataType::Index") {
+            Ok(DataType::Index)
+        } else {
+            Err(format!("unknown data type, s: {:?}", s).into())
         }
     }
 }
@@ -74,7 +98,11 @@ impl TextWriter {
             let origin_encoded_key = keys::origin_key(key);
             let (user_key, _) = Key::split_on_ts_for(origin_encoded_key).unwrap();
             let raw_key = Key::from_encoded_slice(user_key).into_raw().unwrap();
-            self.data_type = Some(DataType::new(&raw_key).unwrap());
+            let dt = DataType::new(&raw_key).unwrap();
+            self.file_size += self
+                .file_writer
+                .write(format!("{}\n", dt.to_string()).as_bytes())?;
+            self.data_type = Some(dt);
         }
         let mut s = match (self.cf, self.data_type.as_ref().unwrap()) {
             (CF_DEFAULT, DataType::Record) => kv_to_text(key, val, &self.table_info).unwrap(),
@@ -109,19 +137,17 @@ pub struct TextReader {
 }
 
 impl TextReader {
-    pub fn new(
-        path: &str,
-        table_info: TableInfo,
-        cf: &str,
-        key_prefix: &[u8],
-    ) -> io::Result<TextReader> {
-        let data_type = DataType::new(key_prefix).unwrap();
-        let lines_reader = match OpenOptions::new().read(true).open(path) {
+    pub fn new(path: &str, table_info: TableInfo, cf: &str) -> io::Result<TextReader> {
+        let mut lines_reader = match OpenOptions::new().read(true).open(path) {
             Ok(f) => BufReader::new(f).lines(),
             Err(e) => {
                 error!("failed to open file"; "err" => ?e, "path" => path);
                 return Err(e);
             }
+        };
+        let data_type = match lines_reader.next() {
+            Some(l) => DataType::from_str((l?).as_str()).expect("backup text file corrupted"),
+            None => panic!("backup text file corrupted"),
         };
         Ok(TextReader {
             lines_reader,
@@ -137,9 +163,8 @@ impl TextReader {
         table_info: TableInfo,
         cf: &str,
         seek_key: SeekKey,
-        key_prefix: &[u8],
     ) -> io::Result<TextReader> {
-        let mut text_reader = TextReader::new(path, table_info, cf, key_prefix)?;
+        let mut text_reader = TextReader::new(path, table_info, cf)?;
         match seek_key {
             SeekKey::Start => return Ok(text_reader),
             SeekKey::Key(sk) => {

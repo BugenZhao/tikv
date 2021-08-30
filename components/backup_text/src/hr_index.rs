@@ -9,8 +9,8 @@ use collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tidb_query_datatype::codec::datum;
 use tidb_query_datatype::codec::table::{
-    self, check_index_key, decode_int_handle, decode_table_id, encode_index_seek_key,
-    INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN,
+    self, decode_index_key_id, encode_index_seek_key, INDEX_VALUE_VERSION_FLAG,
+    MAX_OLD_ENCODED_VALUE_LEN,
 };
 use tidb_query_datatype::expr::EvalContext;
 use tipb::ColumnInfo;
@@ -24,9 +24,9 @@ pub struct HrIndexKey {
     ts: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HrIndexValue {
-    tail_len: u8,
+    tail_len: Option<u8>,
     version_segment: Option<(u8, u8)>,
     common_handle: Option<Vec<HrDatum>>,
     partition_id: Option<i64>,
@@ -61,8 +61,7 @@ impl HrIndex {
         let origin_encoded_key = keys::origin_key(index_key);
         let (user_key, ts) = Key::split_on_ts_for(origin_encoded_key)?;
         let raw_key = Key::from_encoded_slice(user_key).into_raw()?;
-        check_index_key(&raw_key)?;
-        let (table_id, index_id) = (decode_table_id(&raw_key)?, decode_int_handle(&raw_key)?);
+        let (table_id, index_id) = decode_index_key_id(&raw_key)?;
         // TODO: unflatten
         let handles = datum::decode(&mut &raw_key[table::PREFIX_LEN + table::ID_LEN..])?
             .into_iter()
@@ -98,6 +97,14 @@ impl HrIndex {
         ctx: &mut EvalContext,
         cols: &HashMap<i64, &ColumnInfo>,
     ) -> Result<HrIndexValue> {
+        // Process old collation kv
+        if index_value.len() <= MAX_OLD_ENCODED_VALUE_LEN {
+            return Ok(HrIndexValue {
+                tail: Some(HrIndexTail::from_bytes(index_value)),
+                ..Default::default()
+            });
+        }
+
         let index_version = HrIndex::get_index_version(index_value)?;
         let tail_len = index_value[0] as usize;
         if tail_len >= index_value.len() {
@@ -140,7 +147,7 @@ impl HrIndex {
             restore_data = Some(RowV2::from_bytes(ctx, restore_data_bytes, cols)?);
         }
         Ok(HrIndexValue {
-            tail_len: tail_len as u8,
+            tail_len: Some(tail_len as u8),
             version_segment,
             common_handle,
             partition_id,
@@ -159,7 +166,9 @@ impl HrIndex {
             restore_data,
             tail,
         } = index_value;
-        buf.push(tail_len);
+        if let Some(tail_len) = tail_len {
+            buf.push(tail_len);
+        }
         if let Some(version_segment) = version_segment {
             buf.push(version_segment.0);
             buf.push(version_segment.1);

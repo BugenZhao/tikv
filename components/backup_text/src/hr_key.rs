@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::{codec::table::*};
+use tidb_query_datatype::codec::table::*;
 use txn_types::{Key, TimeStamp};
 
 use crate::{eval_context, hr_datum::HrDatum};
@@ -44,11 +44,15 @@ impl HrDataKey {
         let raw_key = Key::from_encoded_slice(user_key).into_raw().unwrap();
 
         let table_id = decode_table_id(&raw_key).unwrap();
-        let handle = decode_int_handle(&raw_key)
-            .map(HrHandle::Int)
-            .or_else(|_| decode_common_handle(&raw_key).map(HrHandle::from_encoded_common_handle))
-            .unwrap();
-
+        let handle = if raw_key.len() == PREFIX_LEN + 8 {
+            // Int handle
+            decode_int_handle(&raw_key).map(HrHandle::Int).unwrap()
+        } else {
+            // Common handle
+            decode_common_handle(&raw_key)
+                .map(HrHandle::from_encoded_common_handle)
+                .unwrap()
+        };
         Self {
             table_id,
             ts,

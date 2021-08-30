@@ -135,6 +135,27 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     buf.read_i64().map_err(Error::from)
 }
 
+/// Decodes table ID and index ID from the key.
+pub fn decode_index_key_id(key: &[u8]) -> Result<(i64, i64)> {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
+        return Err(invalid_type!(
+            "index key expected, but got {}",
+            log_wrappers::Value::key(key)
+        ));
+    }
+    let table_id = buf.read_i64()?;
+    if buf.read_bytes(SEP_LEN)? != INDEX_PREFIX_SEP {
+        return Err(invalid_type!(
+            "expected key sep type {}, but got key {})",
+            log_wrappers::Value::key(INDEX_PREFIX_SEP),
+            log_wrappers::Value::key(key)
+        ));
+    }
+    let index_id = buf.read_i64()?;
+    Ok((table_id, index_id))
+}
+
 /// `flatten` flattens the datum.
 #[inline]
 pub fn flatten(ctx: &mut EvalContext, data: Datum) -> Result<Datum> {

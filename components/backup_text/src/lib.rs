@@ -14,7 +14,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tidb_query_datatype::expr::{EncodingFlag, EvalConfig, EvalContext};
 
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type Error = Box<dyn std::error::Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn to_text<T: Serialize>(src: T) -> String {
     serde_json::to_string(&src).unwrap()
