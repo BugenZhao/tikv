@@ -177,6 +177,7 @@ impl HrIndex {
             let handles: Vec<_> = common_handle.into_iter().map(HrDatum::into).collect();
             let common_handle_bytes = datum::encode_key(ctx, &handles)?;
             buf.push(table::INDEX_VALUE_COMMON_HANDLE_FLAG);
+            buf.write_u16(common_handle_bytes.len() as u16)?;
             buf.extend(&common_handle_bytes);
         }
         if let Some(partition_id) = partition_id {
