@@ -140,6 +140,11 @@ impl TextWriter {
     pub fn cleanup(self) -> io::Result<()> {
         Ok(fs::remove_file(&self.name)?)
     }
+
+    /// Get a reference to the text writer's name.
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
 }
 
 pub struct TextReader {
