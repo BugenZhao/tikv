@@ -8,13 +8,14 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use backup_text::rwer::TextWriter;
+use backup_text::{decode_key, rwer::TextWriter};
 use collections::HashMap;
 use engine_rocks::RocksSstReader;
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
-use futures::{future::join_all, AsyncRead, AsyncReadExt};
-use kvproto::brpb::{BackupMeta, File, Schema};
+use futures::{future::join_all, AsyncReadExt};
+use keys::data_key;
+use kvproto::brpb::{BackupMeta, File};
 use protobuf::Message;
 use structopt::StructOpt;
 use tidb_query_datatype::codec::table::decode_table_id;
@@ -35,17 +36,26 @@ struct Opt {
     path: PathBuf,
 }
 
-fn rewrite(_table_id: i64, dir: PathBuf, file: &File, table_info: TableInfo) -> Result<()> {
+fn rewrite(
+    _table_id: i64,
+    dir: impl AsRef<Path>,
+    file: &File,
+    table_info: TableInfo,
+) -> Result<()> {
+    let start_key = file.get_start_key();
+    let end_key = file.get_end_key();
+
     let path = {
-        let mut path = dir;
+        let mut path = PathBuf::from(dir.as_ref());
         path.push(file.get_name());
         path
     };
-
     let reader = RocksSstReader::open(path.to_str().unwrap())?;
     reader.verify_checksum()?;
+
     let mut iter = reader.iter();
-    iter.seek(SeekKey::Start)?;
+    iter.seek(SeekKey::Key(&data_key(start_key)))?;
+    // assert_eq!(start_key, decode_key(iter.key()).0); // todo: why not eq?
 
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let name = format!("{}_rewrite", path.to_str().unwrap());
@@ -55,6 +65,9 @@ fn rewrite(_table_id: i64, dir: PathBuf, file: &File, table_info: TableInfo) -> 
     let mut count = 0;
     while iter.valid()? {
         let key = iter.key();
+        if decode_key(key).0.as_slice() >= end_key { // todo: really needed?
+            break;
+        }
         let value = match cf {
             CF_WRITE => {
                 let write = WriteRef::parse(iter.value())?;

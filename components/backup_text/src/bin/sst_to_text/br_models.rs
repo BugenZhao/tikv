@@ -1,6 +1,6 @@
 use kvproto::brpb::Schema;
 use serde::{Deserialize, Serialize};
-use tipb::{ColumnInfo, FieldType, TableInfo};
+use tipb::{ColumnInfo, TableInfo};
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct BrTableInfo {

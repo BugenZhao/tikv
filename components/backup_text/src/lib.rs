@@ -14,6 +14,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tidb_query_datatype::expr::{EncodingFlag, EvalConfig, EvalContext};
 
+pub use hr_key::decode_key;
+
 pub type Error = Box<dyn std::error::Error>;
 pub type Result<T> = std::result::Result<T, Error>;
 
