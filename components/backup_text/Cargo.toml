@@ -46,3 +46,4 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 protobuf = "2"
 async-recursion = "0.3"
 anyhow = "1.0"
+slog-term = "2.4"

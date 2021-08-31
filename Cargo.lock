@@ -282,6 +282,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "slog-term",
  "structopt",
  "tidb_query_datatype",
  "tikv_util",
