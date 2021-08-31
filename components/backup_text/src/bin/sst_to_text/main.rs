@@ -1,5 +1,6 @@
 mod br_models;
 mod metafile;
+mod utils;
 
 use std::{
     borrow::Cow,
@@ -13,9 +14,8 @@ use collections::HashMap;
 use engine_rocks::RocksSstReader;
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
-use futures::{future::join_all, AsyncReadExt, FutureExt};
+use futures::{future::try_join_all, FutureExt};
 use kvproto::brpb::{BackupMeta, File};
-use protobuf::Message;
 use slog::Drain;
 use slog_global::{info, warn};
 use structopt::StructOpt;
@@ -26,7 +26,8 @@ use txn_types::WriteRef;
 
 use crate::{
     br_models::schema_to_table_info,
-    metafile::{read_data_files, read_schemas},
+    metafile::{mutate_data_files, read_data_files, read_schemas},
+    utils::{read_message, write_message},
 };
 
 const META_FILE: &'static str = "backupmeta";
@@ -40,9 +41,9 @@ struct Opt {
 fn rewrite(
     _table_id: i64,
     dir: impl AsRef<Path>,
-    file: &File,
+    file: File,
     table_info: TableInfo,
-) -> Result<()> {
+) -> Result<File> {
     let path = {
         let mut path = PathBuf::from(dir.as_ref());
         path.push(file.get_name());
@@ -92,7 +93,17 @@ fn rewrite(
     let file_name = path_str.replace(".sst", ".rewrite.txt");
     fs::rename(&temp_name, &file_name)?;
 
-    Ok(())
+    let mutated_file = {
+        let size = fs::metadata(&file_name).unwrap().len();
+        let mut file = file;
+        file.clear_sha256();
+        file.clear_crc64xor();
+        file.set_name(file_name);
+        file.set_size(size);
+        file
+    };
+
+    Ok(mutated_file)
 }
 
 async fn worker() -> Result<()> {
@@ -100,14 +111,7 @@ async fn worker() -> Result<()> {
     let backend = make_local_backend(&path);
     let storage = create_storage(&backend)?;
 
-    let meta = {
-        let mut meta_reader = storage.read(META_FILE);
-        let mut buf = vec![];
-        meta_reader.read_to_end(&mut buf).await?;
-        let mut meta = BackupMeta::new();
-        meta.merge_from_bytes(&buf)?;
-        meta
-    };
+    let meta: BackupMeta = read_message(&storage, META_FILE).await?;
 
     let file_map = {
         let mut map: HashMap<i64, Vec<File>> = Default::default();
@@ -117,6 +121,8 @@ async fn worker() -> Result<()> {
         }
         map
     };
+
+    // println!("{:?}", file_map);
 
     let schemas = read_schemas(&storage, &meta).await;
 
@@ -133,17 +139,39 @@ async fn worker() -> Result<()> {
             let table_info = table_info.clone();
             let dir = path.clone();
             let handle = tokio::task::spawn_blocking(move || {
-                rewrite(table_id, dir, &file, table_info)
-                    .map_err(|e| anyhow!("failed to rewrite file {}: {}", file.get_name(), e))
+                let name = file.get_name().to_owned();
+                let mutated_file = rewrite(table_id, dir, file, table_info)
+                    .map_err(|e| anyhow!("failed to rewrite file {}: {}", name, e))
                     .unwrap();
-                info!("rewrite done"; "file" => file.get_name());
+                info!("rewrite done"; "file" => &name);
+                (name, mutated_file)
             });
             handles.push(handle);
         }
     }
 
-    join_all(handles).await;
-    info!("all done");
+    let mutated_file_map = try_join_all(handles)
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    info!("rewrite all done");
+
+    let new_meta = {
+        let mut meta = meta;
+        mutate_data_files(&storage, &mut meta, |file| {
+            let mutated_file = mutated_file_map
+                .get(file.get_name())
+                .cloned()
+                .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
+                .unwrap();
+            *file = mutated_file;
+        })
+        .await;
+        meta
+    };
+
+    write_message(&storage, format!("{}.new", META_FILE), new_meta)?;
+    info!("update meta file done");
 
     Ok(())
 }
