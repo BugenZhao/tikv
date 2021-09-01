@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use backup_text::rwer::TextWriter;
+use backup_text::{decode_key, rwer::TextWriter};
 use collections::HashMap;
 use engine_rocks::RocksSstReader;
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, CF_DEFAULT, CF_WRITE};
@@ -47,6 +47,9 @@ fn rewrite(
     file: File,
     table_info: TableInfo,
 ) -> Result<File> {
+    let start_key = file.get_start_key();
+    let end_key = file.get_end_key();
+
     let get_path = |dir: &Path| {
         let mut path = PathBuf::from(dir);
         path.push(file.get_name());
@@ -62,7 +65,7 @@ fn rewrite(
     reader.verify_checksum()?;
 
     let mut iter = reader.iter();
-    iter.seek(SeekKey::Start)?; // ignore start_key in file
+    iter.seek(SeekKey::Key(start_key))?; // ignore start_key in file
 
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let mut writer = TextWriter::new(table_info, cf, &format!("{}.rewrite_tmp", new_path_str))?;
@@ -71,6 +74,10 @@ fn rewrite(
     let mut count = 0;
     while iter.valid()? {
         let key = iter.key();
+        if decode_key(key).0.as_slice() >= end_key {
+            // todo: really needed?
+            break;
+        }
         let value = match cf {
             CF_WRITE => {
                 let write = WriteRef::parse(iter.value())?;

@@ -19,13 +19,14 @@ use tipb::{ColumnInfo, TableInfo};
 use txn_types::Key;
 
 pub struct TextWriter {
-    cxt: EvalContext,
+    ctx: EvalContext,
     data_type: Option<DataType>,
     file_writer: BufWriter<File>,
+    table_info: TableInfo,
+    columns: HashMap<i64, ColumnInfo>,
     file_size: usize,
     name: String,
     cf: CfName,
-    column_id_info: HashMap<i64, ColumnInfo>,
 }
 
 enum DataType {
@@ -68,13 +69,8 @@ impl FromStr for DataType {
 }
 
 impl TextWriter {
-    pub fn new(mut table_info: TableInfo, cf: CfName, name: &str) -> io::Result<TextWriter> {
+    pub fn new(table_info: TableInfo, cf: CfName, name: &str) -> io::Result<TextWriter> {
         let name = format!("{}_{}", name, cf);
-        let column_id_info = table_info
-            .take_columns()
-            .into_iter()
-            .map(|ci| (ci.get_column_id(), ci))
-            .collect();
         let file = match OpenOptions::new()
             .write(true)
             .truncate(true)
@@ -88,14 +84,16 @@ impl TextWriter {
             }
         };
         let file_writer = BufWriter::new(file);
+        let columns = table_to_columns(&table_info);
         Ok(TextWriter {
-            cxt: eval_context(),
+            ctx: eval_context(),
             data_type: None,
             file_writer,
+            table_info,
+            columns,
             file_size: 0,
             name: name.to_owned(),
             cf,
-            column_id_info,
         })
     }
 
@@ -115,14 +113,10 @@ impl TextWriter {
             self.data_type = Some(dt);
         }
         let mut s = match (self.cf, self.data_type.as_ref().unwrap()) {
-            (CF_DEFAULT, DataType::Record) => {
-                kv_to_text(&mut self.cxt, &self.column_id_info, key, val).unwrap()
-            }
-            (CF_DEFAULT, DataType::Index) => {
-                index_kv_to_text(&mut self.cxt, &self.column_id_info, key, val).unwrap()
-            }
-            (CF_WRITE, DataType::Record) => kv_to_write(key, val),
-            (CF_WRITE, DataType::Index) => index_kv_to_write(key, val),
+            (CF_DEFAULT, DataType::Record) => kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap(),
+            (CF_DEFAULT, DataType::Index) => index_kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap(),
+            (CF_WRITE, DataType::Record) => kv_to_write(&mut self.ctx, key, val, &self.columns),
+            (CF_WRITE, DataType::Index) => index_kv_to_write(&mut self.ctx, key, val, &self.columns),
             _ => unreachable!(),
         };
         s.push('\n');
@@ -148,15 +142,17 @@ impl TextWriter {
 }
 
 pub struct TextReader {
-    cxt: EvalContext,
+    ctx: EvalContext,
     data_type: DataType,
     lines_reader: Lines<BufReader<File>>,
     next_kv: Option<(Vec<u8>, Vec<u8>)>,
+    table_info: TableInfo,
+    columns: HashMap<i64, ColumnInfo>,
     cf: String,
 }
 
 impl TextReader {
-    pub fn new(path: &str, _table_info: TableInfo, cf: &str) -> io::Result<TextReader> {
+    pub fn new(path: &str, table_info: TableInfo, cf: &str) -> io::Result<TextReader> {
         let mut lines_reader = match OpenOptions::new().read(true).open(path) {
             Ok(f) => BufReader::new(f).lines(),
             Err(e) => {
@@ -168,11 +164,14 @@ impl TextReader {
             Some(l) => DataType::from_str((l?).as_str()).expect("backup text file corrupted"),
             None => panic!("backup text file corrupted"),
         };
+        let columns = table_to_columns(&table_info);
         Ok(TextReader {
-            cxt: eval_context(),
+            ctx: eval_context(),
             data_type,
             lines_reader,
             next_kv: None,
+            table_info,
+            columns,
             cf: cf.to_owned(),
         })
     }
@@ -215,14 +214,22 @@ impl TextReader {
                 Ok(l) => l,
             };
             let res = match (self.cf.as_str(), &self.data_type) {
-                (CF_DEFAULT, DataType::Record) => text_to_kv(&mut self.cxt, l.as_str()),
-                (CF_DEFAULT, DataType::Index) => index_text_to_kv(&mut self.cxt, l.as_str()),
-                (CF_WRITE, DataType::Record) => write_to_kv(l.as_str()),
-                (CF_WRITE, DataType::Index) => index_write_to_kv(l.as_str()),
+                (CF_DEFAULT, DataType::Record) => text_to_kv(&mut self.ctx, l.as_str(), &self.columns),
+                (CF_DEFAULT, DataType::Index) => index_text_to_kv(&mut self.ctx, l.as_str(), &self.columns),
+                (CF_WRITE, DataType::Record) => write_to_kv(&mut self.ctx, l.as_str()),
+                (CF_WRITE, DataType::Index) => index_write_to_kv(&mut self.ctx, l.as_str()),
                 _ => unreachable!(),
             };
             return Ok(Some(res));
         }
         Ok(None)
     }
+}
+
+fn table_to_columns(table: &TableInfo) -> HashMap<i64, ColumnInfo> {
+    let columns_info = table.get_columns();
+    columns_info
+        .iter()
+        .map(|ci| (ci.get_column_id(), ci.clone()))
+        .collect()
 }

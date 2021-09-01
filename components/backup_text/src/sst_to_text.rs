@@ -11,94 +11,100 @@ use crate::{
     to_text, Result,
 };
 use collections::HashMap;
-use tidb_query_datatype::codec::{row, table, Result as CodecResult};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{row, table, Result as CodecResult},
+    expr::EvalContext,
+};
 use tipb::ColumnInfo;
 use txn_types::WriteRef;
 
 pub fn kv_to_text(
     ctx: &mut EvalContext,
-    column_id_info: &HashMap<i64, ColumnInfo>,
     key: &[u8],
     val: &[u8],
+    columns: &HashMap<i64, ColumnInfo>,
 ) -> CodecResult<String> {
-    let value = match val.get(0) {
-        Some(&row::v2::CODEC_VERSION) => HrValue::V2(RowV2::from_bytes(ctx, val, column_id_info)?),
-        Some(_ /* v1 */) => {
-            let mut data = val;
-            let (ids, datums) = table::decode_row_vec(&mut data, ctx, column_id_info)?;
-            let datums = datums.into_iter().map(HrDatum::from).collect();
-            let row_v1 = RowV1 { ids, datums };
-            HrValue::V1(row_v1)
-        }
-        None => HrValue::V1(Default::default()),
-    };
-
     let key = HrDataKey::from_encoded(key);
+    let value = HrValue::from_bytes(ctx, val, columns)?;
 
     Ok(to_text(HrKv { key, value }))
 }
 
 pub fn index_kv_to_text(
     ctx: &mut EvalContext,
-    column_id_info: &HashMap<i64, ColumnInfo>,
     key: &[u8],
     val: &[u8],
+    columns: &HashMap<i64, ColumnInfo>,
 ) -> Result<String> {
-    Ok(to_text(HrIndex {
-        key: HrIndex::decode_index_key(key)?,
-        value: HrIndex::decode_index_value(val, ctx, &column_id_info)?,
-    }))
+    let key = HrIndex::decode_index_key(key)?;
+    let value = HrIndex::decode_index_value(val, ctx, columns)?;
+    Ok(to_text(HrIndex { key, value }))
 }
 
-pub fn text_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
+pub fn text_to_kv(
+    ctx: &mut EvalContext,
+    line: &str,
+    _columns: &HashMap<i64, ColumnInfo>,
+) -> (Vec<u8>, Vec<u8>) {
     let HrKv { key, value } = from_text(line);
-    match value {
-        HrValue::V1(RowV1 { ids, datums }) => {
-            let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
-            let datums = datums.into_iter().map(|d| d.into()).collect();
-            let value = table::encode_row(ctx, datums, &ids).unwrap();
-            (key.into_encoded(), value)
-        }
-        HrValue::V2(row_v2) => (key.into_encoded(), row_v2.into_bytes(ctx).unwrap()),
-    }
+
+    let key = key.into_encoded();
+    let value = value.into_bytes(ctx).unwrap();
+    (key, value)
 }
 
-pub fn index_text_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
+pub fn index_text_to_kv(
+    ctx: &mut EvalContext,
+    line: &str,
+    _columns: &HashMap<i64, ColumnInfo>,
+) -> (Vec<u8>, Vec<u8>) {
     let HrIndex { key, value } = from_text(line);
+
     let key = HrIndex::encode_index_key(ctx, key).unwrap();
     let value = HrIndex::encode_index_value(ctx, value).unwrap();
     (key, value)
 }
 
-pub fn kv_to_write(key: &[u8], val: &[u8]) -> String {
+pub fn kv_to_write(
+    ctx: &mut EvalContext,
+    key: &[u8],
+    val: &[u8],
+    columns: &HashMap<i64, ColumnInfo>,
+) -> String {
     let hr_write = HrKvWrite {
         key: HrDataKey::from_encoded(&key),
-        value: HrWrite::from(WriteRef::parse(val).unwrap()),
+        value: HrWrite::from_ref_data(ctx, WriteRef::parse(val).unwrap(), columns),
     };
     to_text(hr_write)
 }
 
-pub fn write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
+pub fn write_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKvWrite { key, value } = from_text(line);
-    let value: WriteRef<'_> = value.into();
-    (key.into_encoded(), value.to_bytes())
+
+    let key = key.into_encoded();
+    let value = value.into_bytes(ctx);
+    (key, value)
 }
 
-pub fn index_kv_to_write(key: &[u8], val: &[u8]) -> String {
+pub fn index_kv_to_write(
+    ctx: &mut EvalContext,
+    key: &[u8],
+    val: &[u8],
+    columns: &HashMap<i64, ColumnInfo>,
+) -> String {
     let hr_write = HrIndexKvWrite {
         key: HrIndex::decode_index_key(key).unwrap(),
-        value: HrWrite::from(WriteRef::parse(val).unwrap()),
+        value: HrWrite::from_ref_index(ctx, WriteRef::parse(val).unwrap(), columns),
     };
     to_text(hr_write)
 }
 
-pub fn index_write_to_kv(line: &str) -> (Vec<u8>, Vec<u8>) {
-    let ctx = &mut eval_context();
+pub fn index_write_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrIndexKvWrite { key, value } = from_text(line);
+
     let key = HrIndex::encode_index_key(ctx, key).unwrap();
-    let value: WriteRef<'_> = value.into();
-    (key, value.to_bytes())
+    let value = value.into_bytes(ctx);
+    (key, value)
 }
 
 #[cfg(test)]
@@ -116,6 +122,7 @@ mod tests {
     };
 
     use tikv_util::map;
+    use tipb::TableInfo;
     use txn_types::Key;
 
     use super::*;
@@ -256,10 +263,10 @@ mod tests {
 
         let val = encode_row(ctx, col_values.clone(), &col_ids).unwrap();
 
-        let text = kv_to_text(&key, &val, &table_info).unwrap();
+        let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
         println!("{}", text);
 
-        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
+        let (restored_key, restored_val) = text_to_kv(ctx, &text, &cols_v1);
         let restored_row = decode_row(&mut restored_val.as_slice(), ctx, &cols_v1).unwrap();
         println!("{:?}", restored_row);
 
@@ -273,7 +280,7 @@ mod tests {
         use v2::encoder_for_test::RowEncoder;
         let ctx = &mut eval_context();
 
-        let (key, _, _, cols_v2, table_info) = table();
+        let (key, cols_v1, _, cols_v2, table_info) = table();
 
         let val = {
             let mut buf = vec![];
@@ -281,10 +288,10 @@ mod tests {
             buf
         };
 
-        let text = kv_to_text(&key, &val, &table_info).unwrap();
+        let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
         println!("{}", text);
 
-        let (restored_key, restored_val) = text_to_kv(&text, &table_info);
+        let (restored_key, restored_val) = text_to_kv(ctx, &text, &cols_v1);
 
         assert_eq!(restored_key, key);
         assert_eq!(restored_val, val);
@@ -292,6 +299,8 @@ mod tests {
 
     #[test]
     fn test_json_depth() {
+        let ctx = &mut eval_context();
+
         let json_depth = 123;
         let text = {
             let mut json_text = String::new();
@@ -305,7 +314,7 @@ mod tests {
             text.replace("<json>", &json_text)
         };
 
-        let table_info = {
+        let columns = {
             let col_1 = {
                 let mut ci: ColumnInfo = FieldTypeTp::Long.into();
                 ci.set_column_id(1);
@@ -316,11 +325,11 @@ mod tests {
                 ci.set_column_id(2);
                 ci
             };
-            let mut info = TableInfo::new();
-            info.set_table_id(233);
-            info.set_columns(vec![col_1, col_2].into());
-            info
+            map! {
+                1 => col_1,
+                2 => col_2
+            }
         };
-        let (..) = text_to_kv(&text, &table_info);
+        let (..) = text_to_kv(ctx, &text, &columns);
     }
 }
