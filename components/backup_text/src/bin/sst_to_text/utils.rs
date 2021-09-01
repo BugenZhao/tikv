@@ -3,6 +3,7 @@
 use anyhow::Result;
 use external_storage_export::ExternalStorage;
 use futures::{io::Cursor, AsyncReadExt};
+use kvproto::brpb::File;
 
 pub fn write_message(
     storage: &impl ExternalStorage,
@@ -25,4 +26,12 @@ pub async fn read_message<M: protobuf::Message>(
     let _ = reader.read_to_end(&mut buf).await?;
     let message = protobuf::parse_from_bytes::<M>(&buf)?;
     Ok(message)
+}
+
+pub fn update_file(file: &mut File, name: String, size: u64) {
+    // todo: checksum should be recalculated
+    file.clear_crc64xor();
+    file.clear_sha256();
+    file.set_name(name);
+    file.set_size(size);
 }

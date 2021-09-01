@@ -5,7 +5,7 @@ use kvproto::brpb::{BackupMeta, File as BrFile, MetaFile, Schema};
 
 use async_recursion::async_recursion;
 
-use crate::utils::{read_message, write_message};
+use crate::utils::{read_message, update_file, write_message};
 
 #[async_recursion(?Send)]
 async fn walk_leaf_meta_file(
@@ -43,10 +43,7 @@ async fn mutate_leaf_meta_file(
 
             let new_name = format!("{}.rewrite", node.name);
             let new_size = write_message(new_storage, &new_name, child).unwrap();
-            node.clear_crc64xor();
-            node.clear_sha256();
-            node.set_name(new_name);
-            node.set_size(new_size);
+            update_file(node, new_name, new_size);
         }
     }
 }
