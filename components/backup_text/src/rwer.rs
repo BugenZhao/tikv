@@ -22,6 +22,7 @@ pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     file_writer: BufWriter<File>,
+    #[allow(dead_code)]
     table_info: TableInfo,
     columns: HashMap<i64, ColumnInfo>,
     file_size: usize,
@@ -146,6 +147,7 @@ pub struct TextReader {
     data_type: DataType,
     lines_reader: Lines<BufReader<File>>,
     next_kv: Option<(Vec<u8>, Vec<u8>)>,
+    #[allow(dead_code)]
     table_info: TableInfo,
     columns: HashMap<i64, ColumnInfo>,
     cf: String,

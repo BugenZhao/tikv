@@ -1,20 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{
-    eval_context, from_text,
-    hr_datum::HrDatum,
+    from_text,
     hr_index::HrIndex,
     hr_key::HrDataKey,
     hr_kv::HrKv,
-    hr_value::{HrValue, RowV1, RowV2},
+    hr_value::HrValue,
     hr_write::{HrIndexKvWrite, HrKvWrite, HrWrite},
     to_text, Result,
 };
 use collections::HashMap;
-use tidb_query_datatype::{
-    codec::{row, table, Result as CodecResult},
-    expr::EvalContext,
-};
+use tidb_query_datatype::{codec::Result as CodecResult, expr::EvalContext};
 use tipb::ColumnInfo;
 use txn_types::WriteRef;
 
@@ -124,6 +120,8 @@ mod tests {
     use tikv_util::map;
     use tipb::TableInfo;
     use txn_types::Key;
+
+    use crate::eval_context;
 
     use super::*;
     use collections::HashMap;
@@ -257,7 +255,7 @@ mod tests {
     fn test_v1() {
         let ctx = &mut eval_context();
 
-        let (key, cols_v1, row, _, table_info) = table();
+        let (key, cols_v1, row, _, _table_info) = table();
         let col_ids = row.iter().map(|p| *p.0).collect::<Vec<_>>();
         let col_values = row.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
 
@@ -280,7 +278,7 @@ mod tests {
         use v2::encoder_for_test::RowEncoder;
         let ctx = &mut eval_context();
 
-        let (key, cols_v1, _, cols_v2, table_info) = table();
+        let (key, cols_v1, _, cols_v2, _table_info) = table();
 
         let val = {
             let mut buf = vec![];
