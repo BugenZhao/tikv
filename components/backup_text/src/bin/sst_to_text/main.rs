@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 mod br_models;
 mod metafile;
 mod utils;
@@ -41,15 +43,21 @@ struct Opt {
 fn rewrite(
     _table_id: i64,
     dir: impl AsRef<Path>,
+    new_dir: impl AsRef<Path>,
     file: File,
     table_info: TableInfo,
 ) -> Result<File> {
-    let path = {
-        let mut path = PathBuf::from(dir.as_ref());
+    let get_path = |dir: &Path| {
+        let mut path = PathBuf::from(dir);
         path.push(file.get_name());
         path
     };
+
+    let path = get_path(dir.as_ref());
     let path_str = path.to_str().unwrap();
+    let new_path = get_path(new_dir.as_ref());
+    let new_path_str = new_path.to_str().unwrap();
+
     let reader = RocksSstReader::open(path_str)?;
     reader.verify_checksum()?;
 
@@ -57,9 +65,8 @@ fn rewrite(
     iter.seek(SeekKey::Start)?; // ignore start_key in file
 
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
-    let name = format!("{}_rewrite", path_str);
-    let mut writer = TextWriter::new(table_info, cf, &name)?;
-    let temp_name = writer.name().to_owned();
+    let mut writer = TextWriter::new(table_info, cf, &format!("{}.rewrite_tmp", new_path_str))?;
+    let temp_path = writer.name().to_owned();
 
     let mut count = 0;
     while iter.valid()? {
@@ -90,15 +97,16 @@ fn rewrite(
     let reader = writer.finish_read()?;
     drop(reader);
 
-    let file_name = path_str.replace(".sst", ".rewrite.txt");
-    fs::rename(&temp_name, &file_name)?;
+    let final_path = new_path_str.replace(".sst", ".rewrite.txt");
+    fs::rename(&temp_path, &final_path)?;
 
     let mutated_file = {
-        let size = fs::metadata(&file_name).unwrap().len();
+        let name = file.get_name().replace(".sst", ".rewrite.txt");
+        let size = fs::metadata(&final_path).unwrap().len();
         let mut file = file;
         file.clear_sha256();
         file.clear_crc64xor();
-        file.set_name(file_name);
+        file.set_name(name);
         file.set_size(size);
         file
     };
@@ -108,8 +116,21 @@ fn rewrite(
 
 async fn worker() -> Result<()> {
     let Opt { path } = Opt::from_args();
-    let backend = make_local_backend(&path);
-    let storage = create_storage(&backend)?;
+    let storage = {
+        let backend = make_local_backend(&path);
+        create_storage(&backend)?
+    };
+
+    let new_path = {
+        let mut new_path = path.clone();
+        new_path.push("rewrite");
+        new_path
+    };
+    let new_storage = {
+        fs::create_dir_all(&new_path)?;
+        let backend = make_local_backend(&new_path);
+        create_storage(&backend)?
+    };
 
     let meta: BackupMeta = read_message(&storage, META_FILE).await?;
 
@@ -137,10 +158,10 @@ async fn worker() -> Result<()> {
         let table_info = table_info_map.get(&table_id).unwrap();
         for file in files {
             let table_info = table_info.clone();
-            let dir = path.clone();
+            let (dir, new_dir) = (path.clone(), new_path.clone());
             let handle = tokio::task::spawn_blocking(move || {
                 let name = file.get_name().to_owned();
-                let mutated_file = rewrite(table_id, dir, file, table_info)
+                let mutated_file = rewrite(table_id, dir, new_dir, file, table_info)
                     .map_err(|e| anyhow!("failed to rewrite file {}: {}", name, e))
                     .unwrap();
                 info!("rewrite done"; "file" => &name);
@@ -158,7 +179,7 @@ async fn worker() -> Result<()> {
 
     let new_meta = {
         let mut meta = meta;
-        mutate_data_files(&storage, &mut meta, |file| {
+        mutate_data_files(&storage, &new_storage, &mut meta, |file| {
             let mutated_file = mutated_file_map
                 .get(file.get_name())
                 .cloned()
@@ -170,7 +191,7 @@ async fn worker() -> Result<()> {
         meta
     };
 
-    write_message(&storage, format!("{}.new", META_FILE), new_meta)?;
+    write_message(&new_storage, META_FILE, new_meta)?;
     info!("update meta file done");
 
     Ok(())

@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use kvproto::brpb::Schema;
 use serde::{Deserialize, Serialize};
 use tipb::{ColumnInfo, TableInfo};
@@ -50,7 +52,7 @@ impl BrColumnInfo {
         ci.set_column_id(self.id);
         ci.set_tp(self.field_type.tp as i32);
         ci.set_flag(self.field_type.flag as i32);
-        // ci.set_column_len(self.field_type.flen as i32);  // todo: flen
+        ci.set_column_len(self.field_type.flen as i32); // todo: flen
         ci.set_decimal(self.field_type.decimal);
         if let Some(elems) = self.field_type.elems {
             ci.set_elems(elems.into());

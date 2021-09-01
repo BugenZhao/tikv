@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use external_storage_export::ExternalStorage;
 use kvproto::brpb::{BackupMeta, File as BrFile, MetaFile, Schema};
 
@@ -26,18 +28,25 @@ async fn walk_leaf_meta_file(
 #[async_recursion(?Send)]
 async fn mutate_leaf_meta_file(
     storage: &impl ExternalStorage,
+    new_storage: &impl ExternalStorage,
     file: &mut MetaFile,
     mutate: &mut impl FnMut(&mut MetaFile) -> (),
 ) {
-    let metas = file.get_meta_files();
+    let metas = file.mut_meta_files();
     if metas.is_empty() {
         mutate(file)
     } else {
-        for node in metas {
+        for node in metas.iter_mut() {
             let name = &node.name;
             let mut child = read_message(storage, name).await.unwrap();
-            mutate_leaf_meta_file(storage, &mut child, mutate).await;
-            write_message(storage, name, child).unwrap();
+            mutate_leaf_meta_file(storage, new_storage, &mut child, mutate).await;
+
+            let new_name = format!("{}.rewrite", node.name);
+            let new_size = write_message(new_storage, &new_name, child).unwrap();
+            node.clear_crc64xor();
+            node.clear_sha256();
+            node.set_name(new_name);
+            node.set_size(new_size);
         }
     }
 }
@@ -68,6 +77,7 @@ pub async fn read_data_files(storage: &impl ExternalStorage, meta: &BackupMeta) 
 
 pub async fn mutate_data_files(
     storage: &impl ExternalStorage,
+    new_storage: &impl ExternalStorage,
     meta: &mut BackupMeta,
     mut mutate: impl FnMut(&mut BrFile) -> (),
 ) {
@@ -75,5 +85,5 @@ pub async fn mutate_data_files(
     let mut mutate_fn = |m: &mut MetaFile| {
         m.mut_data_files().iter_mut().for_each(&mut mutate);
     };
-    mutate_leaf_meta_file(storage, meta.mut_file_index(), &mut mutate_fn).await;
+    mutate_leaf_meta_file(storage, new_storage, meta.mut_file_index(), &mut mutate_fn).await;
 }
