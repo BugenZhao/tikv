@@ -29,25 +29,31 @@ use crate::{
 const META_FILE: &'static str = "backupmeta";
 
 #[derive(StructOpt)]
+#[structopt(name = "rewrite", about = "Rewrite backup files between `sst` and text formats.")]
 struct Opt {
+    /// Path to the directory of original backup files
     #[structopt(parse(from_os_str))]
     path: PathBuf,
+    /// Path to the directory of rewritten backup files, `<path>/rewrite` if not present
+    #[structopt(parse(from_os_str))]
+    new_path: Option<PathBuf>,
+    /// Thread concurrency for rewriting
     #[structopt(short, long, default_value = "8")]
     threads: usize,
 }
 
 async fn worker(opt: Opt) -> Result<()> {
-    let Opt { path, .. } = opt;
+    let Opt { path, new_path, .. } = opt;
     let storage = {
         let backend = make_local_backend(&path);
         create_storage(&backend)?
     };
 
-    let new_path = {
+    let new_path = new_path.unwrap_or_else(|| {
         let mut new_path = path.clone();
         new_path.push("rewrite");
         new_path
-    };
+    });
     let new_storage = {
         fs::create_dir_all(&new_path)?;
         let backend = make_local_backend(&new_path);
