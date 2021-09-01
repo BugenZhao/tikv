@@ -16,14 +16,14 @@ use collections::HashMap;
 use engine_rocks::RocksSstReader;
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
-use futures::{future::try_join_all, FutureExt};
+use futures::future::try_join_all;
 use kvproto::brpb::{BackupMeta, File};
 use slog::Drain;
-use slog_global::{info, warn};
+use slog_global::{error, info, warn};
 use structopt::StructOpt;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tipb::TableInfo;
-use tokio::runtime::Runtime;
+use tokio::runtime;
 use txn_types::WriteRef;
 
 use crate::{
@@ -38,6 +38,8 @@ const META_FILE: &'static str = "backupmeta";
 struct Opt {
     #[structopt(parse(from_os_str))]
     path: PathBuf,
+    #[structopt(short, long, default_value = "8")]
+    threads: usize,
 }
 
 fn rewrite(
@@ -121,8 +123,8 @@ fn rewrite(
     Ok(mutated_file)
 }
 
-async fn worker() -> Result<()> {
-    let Opt { path } = Opt::from_args();
+async fn worker(opt: Opt) -> Result<()> {
+    let Opt { path, .. } = opt;
     let storage = {
         let backend = make_local_backend(&path);
         create_storage(&backend)?
@@ -168,11 +170,16 @@ async fn worker() -> Result<()> {
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let handle = tokio::task::spawn_blocking(move || {
                 let name = file.get_name().to_owned();
-                let mutated_file = rewrite(table_id, dir, new_dir, file, table_info)
-                    .map_err(|e| anyhow!("failed to rewrite file {}: {}", name, e))
-                    .unwrap();
-                info!("rewrite done"; "file" => &name);
-                (name, mutated_file)
+                match rewrite(table_id, dir, new_dir, file, table_info) {
+                    Ok(mutated_file) => {
+                        info!("rewrite done"; "file" => &name);
+                        Ok((name, mutated_file))
+                    }
+                    Err(e) => {
+                        error!("failed to rewrite file"; "file" => &name, "error" => ?e);
+                        Err(e)
+                    }
+                }
             });
             handles.push(handle);
         }
@@ -181,7 +188,8 @@ async fn worker() -> Result<()> {
     let mutated_file_map = try_join_all(handles)
         .await?
         .into_iter()
-        .collect::<HashMap<_, _>>();
+        .collect::<Result<HashMap<_, _>, _>>()
+        .unwrap();
     info!("rewrite all done");
 
     let new_meta = {
@@ -205,7 +213,14 @@ async fn worker() -> Result<()> {
 }
 
 fn main() {
-    let runtime = Runtime::new().unwrap();
+    let opt: Opt = Opt::from_args();
+
+    let runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(opt.threads)
+        .build()
+        .unwrap();
+
     let logger = {
         let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
         let drain = slog_term::CompactFormat::new(decorator).build();
@@ -213,5 +228,6 @@ fn main() {
         slog::Logger::root(drain, slog::o!())
     };
     slog_global::set_global(logger);
-    runtime.block_on(worker().map(Result::unwrap))
+
+    runtime.block_on(worker(opt)).unwrap()
 }
