@@ -33,3 +33,8 @@ pub fn eval_context() -> EvalContext {
         .set(EncodingFlag::DECIMAL_PREFERRED_PREC_FRAC, true);
     EvalContext::new(Arc::new(cfg))
 }
+
+#[inline]
+pub(crate) const fn is_false(v: &bool) -> bool {
+    !(*v)
+}

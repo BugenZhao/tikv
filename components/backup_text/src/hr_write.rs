@@ -36,11 +36,16 @@ pub enum HrShortValue {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrWrite {
-    #[serde(rename = "t", with = "HrWriteType")]
+    #[serde(
+        rename = "t",
+        with = "HrWriteType",
+        skip_serializing_if = "write_type_is_put",
+        default = "write_type_put"
+    )]
     pub write_type: WriteType,
     #[serde(rename = "s")]
     pub start_ts: u64,
-    #[serde(rename = "o")]
+    #[serde(rename = "o", skip_serializing_if = "crate::is_false", default)]
     pub has_overlapped_rollback: bool,
     #[serde(rename = "f", skip_serializing_if = "Option::is_none", default)]
     pub gc_fence: Option<u64>,
@@ -59,6 +64,14 @@ pub enum HrWriteType {
     Lock,
     #[serde(rename = "r")]
     Rollback,
+}
+
+fn write_type_is_put(write_type: &WriteType) -> bool {
+    matches!(write_type, WriteType::Put)
+}
+
+fn write_type_put() -> WriteType {
+    WriteType::Put
 }
 
 impl HrWrite {

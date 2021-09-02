@@ -46,11 +46,11 @@ impl RowV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RowV2 {
-    #[serde(rename = "b")]
+    #[serde(rename = "b", skip_serializing_if = "crate::is_false", default)]
     pub is_big: bool,
     #[serde(rename = "#!")]
     pub non_null_ids: Vec<u32>,
-    #[serde(rename = "#?")]
+    #[serde(rename = "#?", skip_serializing_if = "Vec::is_empty", default)]
     pub null_ids: Vec<u32>,
     #[serde(rename = "d")]
     pub datums: Vec<HrDatum>,
