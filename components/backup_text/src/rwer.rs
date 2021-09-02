@@ -114,15 +114,25 @@ impl TextWriter {
             self.data_type = Some(dt);
         }
         let mut s = match (self.cf, self.data_type.as_ref().unwrap()) {
-            (CF_DEFAULT, DataType::Record) => kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap(),
-            (CF_DEFAULT, DataType::Index) => index_kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap(),
+            (CF_DEFAULT, DataType::Record) => {
+                kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap()
+            }
+            (CF_DEFAULT, DataType::Index) => {
+                index_kv_to_text(&mut self.ctx, key, val, &self.columns).unwrap()
+            }
             (CF_WRITE, DataType::Record) => kv_to_write(&mut self.ctx, key, val, &self.columns),
-            (CF_WRITE, DataType::Index) => index_kv_to_write(&mut self.ctx, key, val, &self.columns),
+            (CF_WRITE, DataType::Index) => {
+                index_kv_to_write(&mut self.ctx, key, val, &self.columns)
+            }
             _ => unreachable!(),
         };
         s.push('\n');
         self.file_size += self.file_writer.write(s.as_bytes())?;
         Ok(())
+    }
+
+    pub fn finish(&mut self) -> io::Result<()> {
+        self.file_writer.flush()
     }
 
     pub fn finish_read(&mut self) -> io::Result<BufReader<File>> {
@@ -216,8 +226,12 @@ impl TextReader {
                 Ok(l) => l,
             };
             let res = match (self.cf.as_str(), &self.data_type) {
-                (CF_DEFAULT, DataType::Record) => text_to_kv(&mut self.ctx, l.as_str(), &self.columns),
-                (CF_DEFAULT, DataType::Index) => index_text_to_kv(&mut self.ctx, l.as_str(), &self.columns),
+                (CF_DEFAULT, DataType::Record) => {
+                    text_to_kv(&mut self.ctx, l.as_str(), &self.columns)
+                }
+                (CF_DEFAULT, DataType::Index) => {
+                    index_text_to_kv(&mut self.ctx, l.as_str(), &self.columns)
+                }
                 (CF_WRITE, DataType::Record) => write_to_kv(&mut self.ctx, l.as_str()),
                 (CF_WRITE, DataType::Index) => index_write_to_kv(&mut self.ctx, l.as_str()),
                 _ => unreachable!(),

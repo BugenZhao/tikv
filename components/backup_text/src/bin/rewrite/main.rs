@@ -29,7 +29,10 @@ use crate::{
 const META_FILE: &'static str = "backupmeta";
 
 #[derive(StructOpt)]
-#[structopt(name = "rewrite", about = "Rewrite backup files between `sst` and text formats.")]
+#[structopt(
+    name = "rewrite",
+    about = "Rewrite backup files between `sst` and text formats."
+)]
 struct Opt {
     /// Path to the directory of original backup files
     #[structopt(parse(from_os_str))]
@@ -45,7 +48,7 @@ struct Opt {
 async fn worker(opt: Opt) -> Result<()> {
     let Opt { path, new_path, .. } = opt;
     let storage = {
-        let backend = make_local_backend(&path);
+        let backend = make_local_backend(&path); // todo: support other backends
         create_storage(&backend)?
     };
 

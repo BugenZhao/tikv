@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fs,
     path::{Path, PathBuf},
 };
@@ -7,13 +6,10 @@ use std::{
 use anyhow::{anyhow, Result};
 use backup_text::rwer::{TextReader, TextWriter};
 use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
-use engine_traits::{
-    name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
-};
+use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use kvproto::brpb::File;
 use slog_global::warn;
 use tipb::TableInfo;
-use txn_types::WriteRef;
 
 use crate::utils::update_file;
 
@@ -68,22 +64,14 @@ pub fn rewrite(
 
             while iter.valid()? {
                 let key = iter.key();
-                let value = match cf {
-                    CF_WRITE => {
-                        let write = WriteRef::parse(iter.value())?;
-                        Cow::Owned(write.to_bytes())
-                    }
-                    CF_DEFAULT => Cow::Borrowed(iter.value()),
-                    _ => unreachable!(),
-                };
+                let value = iter.value();
                 writer.put_line(key, &value)?;
 
                 count += 1;
                 iter.next()?;
             }
 
-            let reader = writer.finish_read()?;
-            drop(reader);
+            let _ = writer.finish()?;
             fs::rename(&temp_path_str, &new_path)?;
             new_path
         }
