@@ -36,7 +36,7 @@ impl RowV2 {
     pub fn from_bytes(
         ctx: &mut EvalContext,
         val: &[u8],
-        column_id_info: &HashMap<i64, &ColumnInfo>,
+        column_id_info: &HashMap<i64, ColumnInfo>,
     ) -> CodecResult<RowV2> {
         let row = RowSlice::from_bytes(val)?;
         let mut non_null_ids = Vec::with_capacity(row.values_num());
@@ -47,10 +47,10 @@ impl RowV2 {
                 let raw_datum = {
                     // encode with V1CompatibleEncoder and decode as v1 datum
                     let mut buf = vec![];
-                    buf.write_v2_as_datum(&row.values()[start..offset], *ci)?;
+                    buf.write_v2_as_datum(&row.values()[start..offset], ci)?;
                     (&mut buf.as_slice()).read_datum()?
                 };
-                let datum = unflatten(ctx, raw_datum, *ci)?;
+                let datum = unflatten(ctx, raw_datum, ci)?;
                 non_null_ids.push(id);
                 hr_datums.push(HrDatum::from(datum));
             }

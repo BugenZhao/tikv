@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::hr_datum::HrDatum;
+use crate::hr_datum::{HrBytes, HrDatum};
 use crate::hr_value::RowV2;
 use crate::Result;
 use codec::number::NumberCodec;
@@ -18,26 +18,38 @@ use txn_types::{Key, TimeStamp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrIndexKey {
+    #[serde(rename = "t")]
     table_id: i64,
+    #[serde(rename = "i")]
     index_id: i64,
+    #[serde(rename = "h")]
     handles: Vec<HrDatum>,
+    #[serde(rename = "s")]
     ts: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HrIndexValue {
+    #[serde(rename = "t")]
     tail_len: Option<u8>,
+    #[serde(rename = "v")]
     version_segment: Option<(u8, u8)>,
+    #[serde(rename = "c")]
     common_handle: Option<Vec<HrDatum>>,
+    #[serde(rename = "p")]
     partition_id: Option<i64>,
+    #[serde(rename = "r")]
     restore_data: Option<RowV2>,
+    #[serde(rename = "a")]
     tail: Option<HrIndexTail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum HrIndexTail {
+    #[serde(rename = "i")]
     Int(i64),
-    Padding(Vec<u8>),
+    #[serde(rename = "p")]
+    Padding(HrBytes),
 }
 
 impl HrIndexTail {
@@ -45,7 +57,7 @@ impl HrIndexTail {
         if data.len() >= 8 {
             HrIndexTail::Int(data.read_u64().unwrap() as i64)
         } else {
-            HrIndexTail::Padding(data.to_vec())
+            HrIndexTail::Padding(HrBytes::from(data.to_vec()))
         }
     }
 }
@@ -95,7 +107,7 @@ impl HrIndex {
     pub fn decode_index_value(
         index_value: &[u8],
         ctx: &mut EvalContext,
-        cols: &HashMap<i64, &ColumnInfo>,
+        cols: &HashMap<i64, ColumnInfo>,
     ) -> Result<HrIndexValue> {
         // Process old collation kv
         if index_value.len() <= MAX_OLD_ENCODED_VALUE_LEN {
@@ -191,7 +203,7 @@ impl HrIndex {
         if let Some(tail) = tail {
             match tail {
                 HrIndexTail::Int(int_handle) => buf.write_u64(int_handle as u64)?,
-                HrIndexTail::Padding(padding) => buf.extend(&padding),
+                HrIndexTail::Padding(padding) => buf.extend::<Vec<_>>(padding.into()),
             }
         }
         Ok(buf)

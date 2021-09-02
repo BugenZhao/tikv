@@ -381,7 +381,7 @@ pub fn decode_row(
 pub fn decode_row_vec(
     data: &mut BytesSlice<'_>,
     ctx: &mut EvalContext,
-    cols: &HashMap<i64, &'_ ColumnInfo>,
+    cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<(Vec<u32>, Vec<Datum>)> {
     let mut values = datum::decode(data)?;
     if values.get(0).map_or(true, |d| *d == Datum::Null) {
@@ -402,7 +402,7 @@ pub fn decode_row_vec(
         };
         let v = drain.next().unwrap();
         if let Some(ci) = cols.get(&id) {
-            let v = unflatten(ctx, v, *ci)?;
+            let v = unflatten(ctx, v, ci)?;
             ids.push(id as u32);
             datums.push(v);
         }

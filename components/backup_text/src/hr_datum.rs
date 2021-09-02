@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
-
-use serde::{Deserialize, Serialize};
 use tikv_util::buffer_vec::BufferVec;
 
 use crate::eval_context;
