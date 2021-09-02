@@ -147,6 +147,9 @@ bitflags! {
         /// Field can't be NULL.
         const NOT_NULL = 1;
 
+        /// Field is part of a primary key.
+        const PRI_KEY = 1 << 1;
+
         /// Field is unsigned.
         const UNSIGNED = 1 << 5;
 

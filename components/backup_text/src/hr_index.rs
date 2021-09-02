@@ -18,33 +18,34 @@ use txn_types::{Key, TimeStamp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrIndexKey {
-    #[serde(rename = "t")]
+    #[serde(rename = "#")]
     table_id: i64,
     #[serde(rename = "i")]
     index_id: i64,
     #[serde(rename = "h")]
     handles: Vec<HrDatum>,
-    #[serde(rename = "s")]
+    #[serde(rename = "t")]
     ts: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HrIndexValue {
-    #[serde(rename = "t")]
+    #[serde(rename = "t", skip_serializing_if = "Option::is_none", default)]
     tail_len: Option<u8>,
-    #[serde(rename = "v")]
+    #[serde(rename = "v", skip_serializing_if = "Option::is_none", default)]
     version_segment: Option<(u8, u8)>,
-    #[serde(rename = "c")]
+    #[serde(rename = "h", skip_serializing_if = "Option::is_none", default)]
     common_handle: Option<Vec<HrDatum>>,
-    #[serde(rename = "p")]
+    #[serde(rename = "p", skip_serializing_if = "Option::is_none", default)]
     partition_id: Option<i64>,
-    #[serde(rename = "r")]
+    #[serde(rename = "r", skip_serializing_if = "Option::is_none", default)]
     restore_data: Option<RowV2>,
-    #[serde(rename = "a")]
+    #[serde(rename = "T", skip_serializing_if = "Option::is_none", default)]
     tail: Option<HrIndexTail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 enum HrIndexTail {
     #[serde(rename = "i")]
     Int(i64),
@@ -64,7 +65,9 @@ impl HrIndexTail {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrIndex {
+    #[serde(rename = "k")]
     pub key: HrIndexKey,
+    #[serde(rename = "v")]
     pub value: HrIndexValue,
 }
 

@@ -36,13 +36,7 @@ pub struct HrDataKey {
 
 impl HrDataKey {
     pub fn from_encoded(encoded_key: &[u8]) -> Self {
-        let origin_encoded_key = keys::origin_key(encoded_key);
-        let (user_key, ts) = Key::split_on_ts_for(origin_encoded_key).map_or_else(
-            |_| (origin_encoded_key, None),
-            |(k, t)| (k, Some(t.into_inner())),
-        );
-        let raw_key = Key::from_encoded_slice(user_key).into_raw().unwrap();
-
+        let (raw_key, ts) = decode_key(encoded_key);
         let table_id = decode_table_id(&raw_key).unwrap();
         let handle = if raw_key.len() == PREFIX_LEN + 8 {
             // Int handle
@@ -55,7 +49,7 @@ impl HrDataKey {
         };
         Self {
             table_id,
-            ts,
+            ts: ts.map(|t| t.into_inner()),
             handle,
         }
     }
@@ -83,6 +77,14 @@ impl HrDataKey {
 
         keys::data_key(&origin_encoded_key)
     }
+}
+
+pub fn decode_key(data_key: &[u8]) -> (Vec<u8>, Option<TimeStamp>) {
+    let origin_encoded_key = keys::origin_key(data_key);
+    let (user_key, ts) = Key::split_on_ts_for(origin_encoded_key)
+        .map_or_else(|_| (origin_encoded_key, None), |(k, t)| (k, Some(t)));
+    let raw_key = Key::from_encoded_slice(user_key).into_raw().unwrap();
+    (raw_key, ts)
 }
 
 #[cfg(test)]
