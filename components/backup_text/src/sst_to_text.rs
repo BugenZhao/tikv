@@ -40,7 +40,6 @@ pub fn index_kv_to_text(
 pub fn text_to_kv(
     ctx: &mut EvalContext,
     line: &str,
-    _columns: &HashMap<i64, ColumnInfo>,
 ) -> (Vec<u8>, Vec<u8>) {
     let HrKv { key, value } = from_text(line);
 
@@ -52,7 +51,6 @@ pub fn text_to_kv(
 pub fn index_text_to_kv(
     ctx: &mut EvalContext,
     line: &str,
-    _columns: &HashMap<i64, ColumnInfo>,
 ) -> (Vec<u8>, Vec<u8>) {
     let HrIndex { key, value } = from_text(line);
 
@@ -264,7 +262,7 @@ mod tests {
         let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
         println!("{}", text);
 
-        let (restored_key, restored_val) = text_to_kv(ctx, &text, &cols_v1);
+        let (restored_key, restored_val) = text_to_kv(ctx, &text);
         let restored_row = decode_row(&mut restored_val.as_slice(), ctx, &cols_v1).unwrap();
         println!("{:?}", restored_row);
 
@@ -289,7 +287,7 @@ mod tests {
         let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
         println!("{}", text);
 
-        let (restored_key, restored_val) = text_to_kv(ctx, &text, &cols_v1);
+        let (restored_key, restored_val) = text_to_kv(ctx, &text);
 
         assert_eq!(restored_key, key);
         assert_eq!(restored_val, val);
@@ -328,6 +326,6 @@ mod tests {
                 2 => col_2
             }
         };
-        let (..) = text_to_kv(ctx, &text, &columns);
+        let (..) = text_to_kv(ctx, &text);
     }
 }

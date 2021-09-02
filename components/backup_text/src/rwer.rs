@@ -22,8 +22,6 @@ pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     file_writer: BufWriter<File>,
-    #[allow(dead_code)]
-    table_info: TableInfo,
     columns: HashMap<i64, ColumnInfo>,
     file_size: usize,
     name: String,
@@ -90,7 +88,6 @@ impl TextWriter {
             ctx: eval_context(),
             data_type: None,
             file_writer,
-            table_info,
             columns,
             file_size: 0,
             name: name.to_owned(),
@@ -157,8 +154,6 @@ pub struct TextReader {
     data_type: DataType,
     lines_reader: Lines<BufReader<File>>,
     next_kv: Option<(Vec<u8>, Vec<u8>)>,
-    #[allow(dead_code)]
-    table_info: TableInfo,
     columns: HashMap<i64, ColumnInfo>,
     cf: String,
 }
@@ -182,7 +177,6 @@ impl TextReader {
             data_type,
             lines_reader,
             next_kv: None,
-            table_info,
             columns,
             cf: cf.to_owned(),
         })
@@ -226,12 +220,8 @@ impl TextReader {
                 Ok(l) => l,
             };
             let res = match (self.cf.as_str(), &self.data_type) {
-                (CF_DEFAULT, DataType::Record) => {
-                    text_to_kv(&mut self.ctx, l.as_str(), &self.columns)
-                }
-                (CF_DEFAULT, DataType::Index) => {
-                    index_text_to_kv(&mut self.ctx, l.as_str(), &self.columns)
-                }
+                (CF_DEFAULT, DataType::Record) => text_to_kv(&mut self.ctx, l.as_str()),
+                (CF_DEFAULT, DataType::Index) => index_text_to_kv(&mut self.ctx, l.as_str()),
                 (CF_WRITE, DataType::Record) => write_to_kv(&mut self.ctx, l.as_str()),
                 (CF_WRITE, DataType::Index) => index_write_to_kv(&mut self.ctx, l.as_str()),
                 _ => unreachable!(),
