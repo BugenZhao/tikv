@@ -54,7 +54,7 @@ struct Request {
     backend: StorageBackend,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
-    is_text_format: bool,
+    format: FileFormat,
     cf: CfName,
     compression_type: CompressionType,
     compression_level: i32,
@@ -80,7 +80,7 @@ impl fmt::Debug for Task {
             )
             .field("end_key", &log_wrappers::Value::key(&self.request.end_key))
             .field("is_raw_kv", &self.request.is_raw_kv)
-            .field("is_text_format", &self.request.is_text_format)
+            .field("format", &self.request.format)
             .field("cf", &self.request.cf)
             .finish()
     }
@@ -120,7 +120,7 @@ impl Task {
                 limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
-                is_text_format: req.get_is_text_format(),
+                format: req.get_format(),
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
@@ -714,7 +714,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
-                        let res = if !request.is_text_format {
+                        let res = if request.format == FileFormat::Sst {
                             let writer_builder = BackupSstWriterBuilder::new(
                                 store_id,
                                 storage.limiter.clone(),
@@ -739,6 +739,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 brange.region.clone(),
                                 sst_max_size,
                                 &request.table_info,
+                                request.format,
                             );
                             brange.backup(
                                 writer_builder,
@@ -1171,7 +1172,7 @@ pub mod tests {
                         cf: engine_traits::CF_DEFAULT,
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
-                        is_text_format: false,
+                        format: FileFormat::Sst,
                         table_info: vec![],
                     },
                     resp: tx,

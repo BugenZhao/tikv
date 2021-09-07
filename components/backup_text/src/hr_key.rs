@@ -31,7 +31,7 @@ pub struct HrDataKey {
     #[serde(rename = "t")]
     ts: Option<u64>,
     #[serde(rename = "h")]
-    handle: HrHandle,
+    pub handle: HrHandle,
 }
 
 impl HrDataKey {

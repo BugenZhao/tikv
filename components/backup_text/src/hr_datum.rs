@@ -1,13 +1,37 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::eval_context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
 use tikv_util::buffer_vec::BufferVec;
+use tikv_util::escape;
 
-use crate::eval_context;
+pub fn write_bytes_to(buf: &mut Vec<u8>, d: &Datum) {
+    let s = match d {
+        Datum::I64(i) => format!("{}", i),
+        Datum::U64(u) => format!("{}", u),
+        Datum::F64(f) => format!("{}", f), // TODO: double to 1.xxx`e`xxx format
+        Datum::Time(t) => format!("\"{}\"", t), // TODO: time zone
+        Datum::Dur(ref d) => format!("\"{}\"", d),
+        Datum::Dec(ref d) => format!("{}", d),
+        Datum::Json(ref d) => format!("\"{}\"", escape(d.to_string().as_bytes())),
+        Datum::Enum(ref e) => format!("\"{}\"", e.to_string()),
+        Datum::Set(ref s) => format!("\"{}\"", s.to_string()),
+        Datum::Null => "NULL".to_owned(),
+        Datum::Max => "MAX".to_owned(),
+        Datum::Min => "MIN".to_owned(),
+        Datum::Bytes(ref bs) => {
+            buf.extend("\"".as_bytes());
+            buf.extend(bs);
+            buf.extend("\"".as_bytes());
+            return;
+        }
+    };
+    buf.extend(s.as_bytes());
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrDuration {

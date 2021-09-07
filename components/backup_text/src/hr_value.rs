@@ -4,7 +4,7 @@ use crate::hr_datum::HrDatum;
 use collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tidb_query_datatype::codec::{
-    datum::DatumDecoder,
+    datum::{Datum, DatumDecoder},
     row::{
         self,
         v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
@@ -26,11 +26,10 @@ pub struct RowV1 {
 impl RowV1 {
     pub fn from_bytes(
         ctx: &mut EvalContext,
-        val: &[u8],
+        mut val: &[u8],
         columns: &HashMap<i64, ColumnInfo>,
     ) -> CodecResult<RowV1> {
-        let mut data = val;
-        let (ids, datums) = table::decode_row_vec(&mut data, ctx, columns)?;
+        let (ids, datums) = table::decode_row_vec(&mut val, ctx, columns)?;
         let datums = datums.into_iter().map(HrDatum::from).collect();
         Ok(RowV1 { ids, datums })
     }
@@ -41,6 +40,14 @@ impl RowV1 {
         let datums = datums.into_iter().map(|d| d.into()).collect();
         let value = table::encode_row(ctx, datums, &ids).unwrap();
         Ok(value)
+    }
+
+    pub fn to_datums(
+        ctx: &mut EvalContext,
+        columns: &HashMap<i64, ColumnInfo>,
+        mut val: &[u8],
+    ) -> CodecResult<HashMap<i64, Datum>> {
+        Ok(table::decode_row(&mut val, ctx, columns)?)
     }
 }
 
@@ -99,6 +106,32 @@ impl RowV2 {
         buf.write_row_with_datum(ctx, is_big, non_null_ids, null_ids, datums)?;
         Ok(buf)
     }
+
+    pub fn to_datums(
+        ctx: &mut EvalContext,
+        columns: &HashMap<i64, ColumnInfo>,
+        val: &[u8],
+    ) -> CodecResult<HashMap<i64, Datum>> {
+        let row = RowSlice::from_bytes(val)?;
+        let mut datums_map = HashMap::default();
+        let mut buf = vec![];
+        for (id, ci) in columns {
+            if let Some((start, offset)) = row.search_in_non_null_ids(*id)? {
+                let raw_datum = {
+                    // encode with V1CompatibleEncoder and decode as v1 datum
+                    buf.write_v2_as_datum(&row.values()[start..offset], ci)?;
+                    let raw_datum = DatumDecoder::read_datum(&mut buf.as_slice())?;
+                    buf.clear();
+                    raw_datum
+                };
+                let row_datum = unflatten(ctx, raw_datum, ci)?;
+                datums_map.insert(*id, row_datum);
+            } else if row.search_in_null_ids(*id) {
+                datums_map.insert(*id, Datum::Null);
+            }
+        }
+        Ok(datums_map)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,5 +163,17 @@ impl HrValue {
             HrValue::V1(row_v1) => row_v1.into_bytes(ctx),
             HrValue::V2(row_v2) => row_v2.into_bytes(ctx),
         }
+    }
+
+    pub fn to_datums(
+        ctx: &mut EvalContext,
+        columns: &HashMap<i64, ColumnInfo>,
+        val: &[u8],
+    ) -> CodecResult<HashMap<i64, Datum>> {
+        assert!(!val.is_empty());
+        Ok(match val[0] {
+            row::v2::CODEC_VERSION => RowV2::to_datums(ctx, columns, val)?,
+            _ => RowV1::to_datums(ctx, columns, val)?,
+        })
     }
 }

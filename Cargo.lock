@@ -2151,7 +2151,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/NingLin-P/kvproto?branch=br-text#864a1a140b233015db9d0084ced8a755f2fb12f8"
+source = "git+https://github.com/NingLin-P/kvproto?branch=br-text#85926e5d6dda482338a704987c67f2e923419d84"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5492,8 +5492,10 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#dc47a87b52aaa5ff150d179f47ba6c25dc441227"
+source = "git+https://github.com/NingLin-P/tipb?branch=br-text#eba5c0782b90bc53c1300c0801d2d25715f0a4a4"
 dependencies = [
+ "futures 0.3.15",
+ "grpcio",
  "lazy_static",
  "prost",
  "prost-derive",

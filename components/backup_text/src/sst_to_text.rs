@@ -1,15 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{
-    from_text,
+    from_text, hr_datum,
     hr_index::HrIndex,
-    hr_key::HrDataKey,
+    hr_key::{HrDataKey, HrHandle},
     hr_kv::HrKv,
     hr_value::HrValue,
     hr_write::{HrIndexKvWrite, HrKvWrite, HrWrite},
+    rwer::Schema,
     to_text, Result,
 };
 use collections::HashMap;
+use tidb_query_datatype::codec::datum::{Datum, DatumDecoder};
+use tidb_query_datatype::codec::table::unflatten;
 use tidb_query_datatype::{codec::Result as CodecResult, expr::EvalContext};
 use tipb::ColumnInfo;
 use txn_types::WriteRef;
@@ -26,6 +29,53 @@ pub fn kv_to_text(
     Ok(to_text(HrKv { key, value }))
 }
 
+pub fn kv_to_csv(
+    ctx: &mut EvalContext,
+    schema: &Schema,
+    key: &[u8],
+    val: &[u8],
+) -> Result<Vec<u8>> {
+    let mut datums_map = HrValue::to_datums(ctx, &schema.columns, val)?;
+    if schema.handle_in_key() {
+        let HrDataKey { handle, .. } = HrDataKey::from_encoded(key);
+        match handle {
+            HrHandle::Int(pk) => {
+                if schema.primary_handle.is_none() {
+                    return Err(format!("unexpect empty primary_handle").into());
+                }
+                datums_map.insert(schema.primary_handle.unwrap(), Datum::I64(pk));
+            }
+            HrHandle::Common(ch) => {
+                if schema.common_handle.is_empty() {
+                    return Err(format!("unexpect empty common_handle").into());
+                }
+                for (h, id) in ch.into_iter().zip(&schema.common_handle) {
+                    datums_map.insert(*id, h.into());
+                }
+            }
+        }
+    }
+    let mut res = Vec::new();
+    for id in &schema.column_ids {
+        let d = match datums_map.remove(id) {
+            Some(d) => d,
+            None if !schema.columns[id].get_default_val().is_empty() => {
+                // Set to the default value
+                let ci = &schema.columns[id];
+                let raw_datum = DatumDecoder::read_datum(&mut ci.get_default_val())?;
+                unflatten(ctx, raw_datum, ci)?
+            }
+            None => Datum::Null,
+        };
+        hr_datum::write_bytes_to(&mut res, &d);
+        res.push(b',');
+    }
+    if !res.is_empty() {
+        res.pop();
+    }
+    Ok(res)
+}
+
 pub fn index_kv_to_text(
     ctx: &mut EvalContext,
     key: &[u8],
@@ -37,10 +87,7 @@ pub fn index_kv_to_text(
     Ok(to_text(HrIndex { key, value }))
 }
 
-pub fn text_to_kv(
-    ctx: &mut EvalContext,
-    line: &str,
-) -> (Vec<u8>, Vec<u8>) {
+pub fn text_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKv { key, value } = from_text(line);
 
     let key = key.into_encoded();
@@ -48,10 +95,7 @@ pub fn text_to_kv(
     (key, value)
 }
 
-pub fn index_text_to_kv(
-    ctx: &mut EvalContext,
-    line: &str,
-) -> (Vec<u8>, Vec<u8>) {
+pub fn index_text_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrIndex { key, value } = from_text(line);
 
     let key = HrIndex::encode_index_key(ctx, key).unwrap();

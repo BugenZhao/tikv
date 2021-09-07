@@ -12,7 +12,7 @@ use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWrite
 use external_storage_export::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
-use kvproto::brpb::File;
+use kvproto::brpb::{File, FileFormat};
 use kvproto::metapb::Region;
 use protobuf::Message;
 use tikv::coprocessor::checksum_crc64_xor;
@@ -22,7 +22,7 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tipb::TableInfo;
-use txn_types::{Key, KvPair, WriteRef};
+use txn_types::{KvPair, WriteRef};
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
@@ -234,7 +234,7 @@ impl BackupWriterBuilder for BackupSstWriterBuilder {
             default,
             write,
             self.sst_max_size,
-            FileFormat::SST,
+            FileFormat::Sst,
         )
     }
 }
@@ -245,6 +245,7 @@ pub struct BackupTextWriterBuilder {
     region: Region,
     sst_max_size: u64,
     table_info: TableInfo,
+    format: FileFormat,
 }
 
 impl BackupTextWriterBuilder {
@@ -254,6 +255,7 @@ impl BackupTextWriterBuilder {
         region: Region,
         sst_max_size: u64,
         table_info_data: &[u8],
+        format: FileFormat,
     ) -> BackupTextWriterBuilder {
         let mut table_info = TableInfo::default();
         table_info.merge_from_bytes(&table_info_data).unwrap();
@@ -263,6 +265,7 @@ impl BackupTextWriterBuilder {
             region,
             sst_max_size,
             table_info,
+            format,
         }
     }
 }
@@ -274,8 +277,18 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key);
         let (default, write) = (
-            TextWriter::new(self.table_info.clone(), CF_DEFAULT, &name)?,
-            TextWriter::new(self.table_info.clone(), CF_WRITE, &name)?,
+            TextWriter::new(
+                self.table_info.clone(),
+                CF_DEFAULT,
+                self.format.clone(),
+                &name,
+            )?,
+            TextWriter::new(
+                self.table_info.clone(),
+                CF_WRITE,
+                self.format.clone(),
+                &name,
+            )?,
         );
         BackupWriter::<TextWriter>::new(
             &name,
@@ -283,22 +296,16 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
             default,
             write,
             self.sst_max_size,
-            FileFormat::Text,
+            self.format,
         )
     }
 }
 
-pub enum FileFormat {
-    SST,
-    Text,
-}
-
-impl FileFormat {
-    fn suffix(&self) -> &'static str {
-        match self {
-            FileFormat::SST => "sst",
-            FileFormat::Text => "txt",
-        }
+fn file_suffix(f: &FileFormat) -> &'static str {
+    match f {
+        FileFormat::Sst => "sst",
+        FileFormat::Text => "txt",
+        FileFormat::Csv => "csv",
     }
 }
 
@@ -339,13 +346,13 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         I: Iterator<Item = TxnEntry>,
     {
         match self.format {
-            FileFormat::SST => self.write_sst(entries, need_checksum),
-            FileFormat::Text => self.write_text(entries, need_checksum),
+            FileFormat::Sst | FileFormat::Text => self.write_all(entries, need_checksum),
+            FileFormat::Csv => self.write_value(entries, need_checksum),
         }
     }
 
-    /// Write entries to buffered SST files.
-    pub fn write_sst<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
+    /// Write entries to buffered SST or Text files.
+    pub fn write_all<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
@@ -374,9 +381,9 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         Ok(())
     }
 
-    /// Write entries to buffered Text files, the short value in `write_cf` will
-    /// move to the `default_cf`
-    pub fn write_text<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
+    /// Write entries to buffered csv files, the csv file only output the actual value
+    /// so we can igorn other content
+    pub fn write_value<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
@@ -387,22 +394,16 @@ impl<LW: LocalWriter> BackupWriter<LW> {
                     ref mut write,
                     ..
                 } => {
+                    // Write the value to the `default` writer
                     if default.0.is_empty() {
-                        // Move the short value from `write_cf` to `default_cf`
+                        // The `ts` in the `write_cf` key is different from the `default_cf` key
+                        // but it is okay since the csv writer will igorn it
                         let mut write_ref = WriteRef::parse(&write.1).unwrap();
-                        default.0 = Key::from_encoded(write.0.clone())
-                            .truncate_ts()
-                            .unwrap()
-                            .append_ts(write_ref.start_ts)
-                            .into_encoded();
-                        default.1 = {
-                            let short_value = write_ref.short_value.take();
-                            short_value.unwrap().to_vec()
-                        };
-                        write.1 = write_ref.to_bytes();
+                        self.default
+                            .write(&write.0, write_ref.short_value.take().unwrap())?;
+                    } else {
+                        self.default.write(&default.0, &default.1)?;
                     }
-                    self.default.write(&default.0, &default.1)?;
-                    self.write.write(&write.0, &write.1)?;
                 }
                 TxnEntry::Prewrite { .. } => {
                     return Err(Error::Other("prewrite is not supported".into()));
@@ -417,10 +418,15 @@ impl<LW: LocalWriter> BackupWriter<LW> {
     pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(2);
-        let write_written = !self.write.is_empty() || !self.default.is_empty();
+        let write_written = if self.format != FileFormat::Csv {
+            !self.write.is_empty() || !self.default.is_empty()
+        } else {
+            // We do not write `write_cf` content to csv file
+            false
+        };
         if !self.default.is_empty() {
             // Save default cf contents.
-            let file_name = format!("{}_{}.{}", self.name, CF_DEFAULT, self.format.suffix());
+            let file_name = format!("{}_{}.{}", self.name, CF_DEFAULT, file_suffix(&self.format));
             let default = self.default.save_and_build_file(
                 &file_name,
                 CF_DEFAULT,
@@ -431,7 +437,7 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         }
         if write_written {
             // Save write cf contents.
-            let file_name = format!("{}_{}.{}", self.name, CF_WRITE, self.format.suffix());
+            let file_name = format!("{}_{}.{}", self.name, CF_WRITE, file_suffix(&self.format));
             let write = self.write.save_and_build_file(
                 &file_name,
                 CF_WRITE,

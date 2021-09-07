@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use backup_text::rwer::{TextReader, TextWriter};
 use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder};
-use kvproto::brpb::File;
+use kvproto::brpb::{File, FileFormat};
 use slog_global::warn;
 use tipb::TableInfo;
 
@@ -55,8 +55,12 @@ pub fn rewrite(
 
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
-            let mut writer =
-                TextWriter::new(table_info, cf, &format!("{}.rewrite_tmp", new_path_str))?;
+            let mut writer = TextWriter::new(
+                table_info,
+                cf,
+                FileFormat::Text,
+                &format!("{}.rewrite_tmp", new_path_str),
+            )?;
             let temp_path_str = writer.name().to_owned();
 
             let mut iter = reader.iter();
