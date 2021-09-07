@@ -9,14 +9,17 @@ use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
 use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use kvproto::brpb::{File, FileFormat};
 use slog_global::warn;
+use structopt::clap::arg_enum;
 use tipb::TableInfo;
 
 use crate::utils::update_file;
 
-#[derive(Debug, Clone, Copy)]
-pub enum RewriteMode {
-    SstToText,
-    TextToSst,
+arg_enum! {
+    #[derive(Debug, Clone, Copy)]
+    pub enum RewriteMode {
+        ToText,
+        ToSst,
+    }
 }
 
 pub fn rewrite(
@@ -25,6 +28,7 @@ pub fn rewrite(
     new_dir: impl AsRef<Path>,
     file: File,
     table_info: TableInfo,
+    mode: RewriteMode,
 ) -> Result<File> {
     let get_path = |dir: &Path| {
         let mut path = PathBuf::from(dir);
@@ -35,21 +39,11 @@ pub fn rewrite(
     let path = get_path(dir.as_ref());
     let path_str = path.to_str().unwrap();
 
-    let mode = path
-        .extension()
-        .and_then(|ext| match ext.to_str().unwrap() {
-            "sst" => Some(RewriteMode::SstToText),
-            "txt" | "csv" => Some(RewriteMode::TextToSst),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("unable to detect rewrite mode"))
-        .unwrap();
-
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let mut count = 0;
 
     let new_path = match mode {
-        RewriteMode::SstToText => {
+        RewriteMode::ToText => {
             let new_path = get_path(new_dir.as_ref()).with_extension("txt");
             let new_path_str = new_path.to_str().unwrap();
 
@@ -79,7 +73,7 @@ pub fn rewrite(
             fs::rename(&temp_path_str, &new_path)?;
             new_path
         }
-        RewriteMode::TextToSst => {
+        RewriteMode::ToSst => {
             let new_path = get_path(new_dir.as_ref()).with_extension("sst");
             let new_path_str = new_path.to_str().unwrap();
 

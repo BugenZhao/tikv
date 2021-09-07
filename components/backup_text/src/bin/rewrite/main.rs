@@ -13,6 +13,7 @@ use collections::HashMap;
 use external_storage_export::{create_storage, make_local_backend};
 use futures::future::try_join_all;
 use kvproto::brpb::{BackupMeta, File};
+use rewrite::RewriteMode;
 use slog::Drain;
 use slog_global::{error, info};
 use structopt::StructOpt;
@@ -34,6 +35,9 @@ const META_FILE: &'static str = "backupmeta";
     about = "Rewrite backup files between `sst` and text formats."
 )]
 struct Opt {
+    /// Rewrite mode, case insensitive
+    #[structopt(possible_values = &RewriteMode::variants(), case_insensitive = true)]
+    mode: RewriteMode,
     /// Path to the directory of original backup files
     #[structopt(parse(from_os_str))]
     path: PathBuf,
@@ -45,8 +49,43 @@ struct Opt {
     threads: usize,
 }
 
+fn check_mode(mode: RewriteMode, file_map: &HashMap<i64, Vec<File>>) -> Result<()> {
+    let paths = file_map
+        .values()
+        .flatten()
+        .map(|f| PathBuf::from(f.get_name()));
+
+    let bad_files = paths
+        .filter(|path| {
+            let ext = path.extension().unwrap_or_default();
+            let ok = match (ext.to_str().unwrap(), mode) {
+                ("sst", RewriteMode::ToText) => true,
+                ("txt" | "csv", RewriteMode::ToSst) => true,
+                _ => false,
+            };
+            !ok
+        })
+        .collect::<Vec<_>>();
+
+    if bad_files.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "bad rewrite mode `{}` on files: {:#?}",
+            mode,
+            bad_files
+        ))
+    }
+}
+
 async fn worker(opt: Opt) -> Result<()> {
-    let Opt { path, new_path, .. } = opt;
+    let Opt {
+        path,
+        new_path,
+        mode,
+        ..
+    } = opt;
+
     let storage = {
         let backend = make_local_backend(&path); // todo: support other backends
         create_storage(&backend)?
@@ -71,6 +110,7 @@ async fn worker(opt: Opt) -> Result<()> {
             let table_id = decode_table_id(file.get_start_key())?;
             map.entry(table_id).or_default().push(file);
         }
+        check_mode(mode, &map)?;
         map
     };
 
@@ -90,7 +130,7 @@ async fn worker(opt: Opt) -> Result<()> {
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
             let handle = tokio::task::spawn_blocking(move || {
-                match rewrite(table_id, dir, new_dir, file, table_info) {
+                match rewrite(table_id, dir, new_dir, file, table_info, mode) {
                     Ok(mutated_file) => {
                         info!("rewrite done"; "file" => &name);
                         Ok((name, mutated_file))
