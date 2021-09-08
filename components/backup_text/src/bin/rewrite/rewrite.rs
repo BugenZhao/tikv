@@ -31,6 +31,14 @@ impl RewriteMode {
             RewriteMode::ToSst => "sst",
         }
     }
+
+    pub fn file_format(&self) -> FileFormat {
+        match self {
+            RewriteMode::ToText => FileFormat::Text,
+            RewriteMode::ToCsv => FileFormat::Csv,
+            RewriteMode::ToSst => FileFormat::Sst,
+        }
+    }
 }
 
 pub fn rewrite(
@@ -57,13 +65,14 @@ pub fn rewrite(
     let new_path_str = new_path.to_str().unwrap();
 
     match mode {
-        RewriteMode::ToText => {
+        RewriteMode::ToText | RewriteMode::ToCsv => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
+
             let mut writer = TextWriter::new(
                 table_info,
                 cf,
-                FileFormat::Text,
+                mode.file_format(),
                 &format!("{}.rewrite_tmp", new_path_str),
             )?;
             let temp_path_str = writer.name().to_owned();
@@ -97,8 +106,6 @@ pub fn rewrite(
 
             let _ = writer.finish()?;
         }
-
-        RewriteMode::ToCsv => unimplemented!("rewriting to CSV"),
     };
 
     if count != file.get_total_kvs() {

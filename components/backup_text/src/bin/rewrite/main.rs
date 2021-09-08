@@ -49,18 +49,16 @@ struct Opt {
     threads: usize,
 }
 
-fn check_mode(mode: RewriteMode, file_map: &HashMap<i64, Vec<File>>) -> Result<()> {
-    let paths = file_map
-        .values()
-        .flatten()
-        .map(|f| PathBuf::from(f.get_name()));
-
-    let bad_files = paths
+fn check_mode<'a>(mode: RewriteMode, files: &[File]) -> Result<()> {
+    let bad_files = files
+        .iter()
+        .map(|f| PathBuf::from(f.get_name()))
         .filter(|path| {
             let ext = path.extension().unwrap_or_default();
             let ok = match (ext.to_str().unwrap(), mode) {
                 ("sst", RewriteMode::ToText | RewriteMode::ToCsv) => true,
-                ("txt" | "csv", RewriteMode::ToSst) => true,
+                ("txt", RewriteMode::ToSst) => true,
+                ("csv", _) => false, // cannot rewrite csv to any other formats
                 _ => false,
             };
             !ok
@@ -106,15 +104,16 @@ async fn worker(opt: Opt) -> Result<()> {
 
     let file_map = {
         let mut map: HashMap<i64, Vec<File>> = Default::default();
-        for file in read_data_files(&storage, &meta).await {
+        let files = read_data_files(&storage, &meta).await?;
+        check_mode(mode, &files)?;
+        for file in files {
             let table_id = decode_table_id(file.get_start_key())?;
             map.entry(table_id).or_default().push(file);
         }
-        check_mode(mode, &map)?;
         map
     };
 
-    let schemas = read_schemas(&storage, &meta).await;
+    let schemas = read_schemas(&storage, &meta).await?;
 
     let table_info_map = schemas
         .into_iter()
@@ -124,7 +123,7 @@ async fn worker(opt: Opt) -> Result<()> {
 
     let mut handles = vec![];
     for (table_id, files) in file_map {
-        let table_info = table_info_map.get(&table_id).unwrap();
+        let table_info = table_info_map.get(&table_id).expect("no table info found");
         for file in files {
             let table_info = table_info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
@@ -150,7 +149,7 @@ async fn worker(opt: Opt) -> Result<()> {
         .into_iter()
         .collect::<Result<HashMap<_, _>, _>>()
         .unwrap();
-    info!("rewrite all done");
+    info!("rewrite data files all done");
 
     let new_meta = {
         let mut meta = meta;
@@ -162,7 +161,7 @@ async fn worker(opt: Opt) -> Result<()> {
                 .unwrap();
             *file = mutated_file;
         })
-        .await;
+        .await?;
         meta
     };
 
@@ -189,5 +188,5 @@ fn main() {
     };
     slog_global::set_global(logger);
 
-    runtime.block_on(worker(opt)).unwrap()
+    runtime.block_on(worker(opt)).expect("rewrite task failed")
 }
