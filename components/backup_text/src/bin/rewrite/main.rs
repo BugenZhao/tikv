@@ -124,12 +124,23 @@ async fn worker(opt: Opt) -> Result<()> {
     let mut handles = vec![];
     for (table_id, files) in file_map {
         let info = info_map.get(&table_id).expect("no table info found");
-        for file in files {
+        let total_files = files.len();
+        for (i, file) in files.into_iter().enumerate() {
             let info = info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
+            let rename_to = (mode == RewriteMode::ToCsv).then(|| {
+                let width = total_files.to_string().len();
+                format!(
+                    "{}.{}.{:0width$}.csv",
+                    info.db_name,
+                    info.table_name,
+                    i,
+                    width = width
+                )
+            });
             let handle = tokio::task::spawn_blocking(move || {
-                match rewrite(table_id, dir, new_dir, file, info, mode) {
+                match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {
                         info!("rewrite done"; "file" => &name);
                         Ok((name, mutated_file))
@@ -151,22 +162,38 @@ async fn worker(opt: Opt) -> Result<()> {
         .unwrap();
     info!("rewrite data files all done");
 
-    let new_meta = {
-        let mut meta = meta;
-        mutate_data_files(&storage, &new_storage, &mut meta, |file| {
-            let mutated_file = mutated_file_map
-                .get(file.get_name())
-                .cloned()
-                .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
-                .unwrap();
-            *file = mutated_file;
-        })
-        .await?;
-        meta
-    };
-
-    write_message(&new_storage, META_FILE, new_meta)?;
-    info!("update meta file done");
+    // Post work
+    match mode {
+        RewriteMode::ToText | RewriteMode::ToSst => {
+            // update meta file for correct restoration
+            let new_meta = {
+                let mut meta = meta;
+                mutate_data_files(&storage, &new_storage, &mut meta, |file| {
+                    let mutated_file = mutated_file_map
+                        .get(file.get_name())
+                        .cloned()
+                        .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
+                        .unwrap();
+                    *file = mutated_file;
+                })
+                .await?;
+                meta
+            };
+            write_message(&new_storage, META_FILE, new_meta)?;
+            info!("update meta file done");
+        }
+        RewriteMode::ToCsv => {
+            // cleanup
+            for file in mutated_file_map.into_values() {
+                let mut path = new_path.clone();
+                path.push(file.name);
+                if fs::metadata(&path)?.len() == 0 {
+                    fs::remove_file(&path)?;
+                }
+            }
+            info!("cleanup done");
+        }
+    }
 
     Ok(())
 }

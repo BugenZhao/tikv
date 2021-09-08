@@ -14,7 +14,7 @@ use structopt::clap::arg_enum;
 use crate::{br_models::RewriteInfo, utils::update_file};
 
 arg_enum! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum RewriteMode {
         ToText,
         ToCsv,
@@ -41,26 +41,30 @@ impl RewriteMode {
 }
 
 pub fn rewrite(
-    _table_id: i64,
     dir: impl AsRef<Path>,
     new_dir: impl AsRef<Path>,
     file: File,
+    rename_to: Option<String>,
     info: RewriteInfo,
     mode: RewriteMode,
 ) -> Result<File> {
-    let get_path = |dir: &Path| {
+    let get_path = |dir: &Path, name: &str| {
         let mut path = PathBuf::from(dir);
-        path.push(file.get_name());
+        path.push(name);
         path
     };
 
-    let path = get_path(dir.as_ref());
+    let path = get_path(dir.as_ref(), file.get_name());
     let path_str = path.to_str().unwrap();
 
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let mut count = 0;
 
-    let new_path = get_path(new_dir.as_ref()).with_extension(mode.extension());
+    let new_path = rename_to
+        .map(|n| get_path(new_dir.as_ref(), &n))
+        .unwrap_or_else(|| {
+            get_path(new_dir.as_ref(), file.get_name()).with_extension(mode.extension())
+        });
     let new_path_str = new_path.to_str().unwrap();
 
     match mode {
