@@ -59,7 +59,7 @@ fn check_mode(mode: RewriteMode, file_map: &HashMap<i64, Vec<File>>) -> Result<(
         .filter(|path| {
             let ext = path.extension().unwrap_or_default();
             let ok = match (ext.to_str().unwrap(), mode) {
-                ("sst", RewriteMode::ToText) => true,
+                ("sst", RewriteMode::ToText | RewriteMode::ToCsv) => true,
                 ("txt" | "csv", RewriteMode::ToSst) => true,
                 _ => false,
             };

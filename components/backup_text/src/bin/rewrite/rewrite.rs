@@ -18,7 +18,18 @@ arg_enum! {
     #[derive(Debug, Clone, Copy)]
     pub enum RewriteMode {
         ToText,
+        ToCsv,
         ToSst,
+    }
+}
+
+impl RewriteMode {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            RewriteMode::ToText => "txt",
+            RewriteMode::ToCsv => "csv",
+            RewriteMode::ToSst => "sst",
+        }
     }
 }
 
@@ -42,11 +53,11 @@ pub fn rewrite(
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let mut count = 0;
 
-    let new_path = match mode {
-        RewriteMode::ToText => {
-            let new_path = get_path(new_dir.as_ref()).with_extension("txt");
-            let new_path_str = new_path.to_str().unwrap();
+    let new_path = get_path(new_dir.as_ref()).with_extension(mode.extension());
+    let new_path_str = new_path.to_str().unwrap();
 
+    match mode {
+        RewriteMode::ToText => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
             let mut writer = TextWriter::new(
@@ -71,12 +82,9 @@ pub fn rewrite(
 
             let _ = writer.finish()?;
             fs::rename(&temp_path_str, &new_path)?;
-            new_path
         }
-        RewriteMode::ToSst => {
-            let new_path = get_path(new_dir.as_ref()).with_extension("sst");
-            let new_path_str = new_path.to_str().unwrap();
 
+        RewriteMode::ToSst => {
             let mut reader = TextReader::new(path_str, table_info, cf)?;
             let mut writer = RocksSstWriterBuilder::new()
                 .set_cf(cf)
@@ -88,8 +96,9 @@ pub fn rewrite(
             }
 
             let _ = writer.finish()?;
-            new_path
         }
+
+        RewriteMode::ToCsv => unimplemented!("rewriting to CSV"),
     };
 
     if count != file.get_total_kvs() {
