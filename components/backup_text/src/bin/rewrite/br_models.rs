@@ -1,12 +1,27 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::brpb::Schema;
 use serde::{Deserialize, Serialize};
 use tipb::{ColumnInfo, TableInfo};
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct BrCiString {
+    #[serde(rename = "O")]
+    pub original: String,
+    #[serde(rename = "L")]
+    pub lower: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct BrDbInfo {
+    pub id: i64,
+    #[serde(rename = "db_name")]
+    pub name: BrCiString,
+}
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct BrTableInfo {
     pub id: i64,
+    pub name: BrCiString,
     #[serde(rename = "cols")]
     pub columns: Vec<BrColumnInfo>,
     pub pk_is_handle: bool,
@@ -39,6 +54,7 @@ impl BrTableInfo {
             id,
             columns,
             pk_is_handle,
+            ..
         } = self;
 
         let mut ti = TableInfo::default();
@@ -76,12 +92,39 @@ impl BrColumnInfo {
     }
 }
 
-pub fn schema_to_table_info(mut schema: Schema) -> TableInfo {
-    let str = String::from_utf8(schema.take_table()).unwrap();
-    let br_table_info = serde_json::from_str::<BrTableInfo>(&str)
-        .map_err(|e| format!("{}\n{}", e, str))
-        .unwrap();
-    br_table_info.into_table_info_lossy()
+#[derive(Debug, Default, Clone)]
+pub struct RewriteInfo {
+    pub table_info: TableInfo,
+    pub table_name: String,
+    pub db_name: String,
+}
+
+impl From<kvproto::brpb::Schema> for RewriteInfo {
+    fn from(schema: kvproto::brpb::Schema) -> Self {
+        let br_table_info = {
+            let str = String::from_utf8(schema.table).unwrap();
+            serde_json::from_str::<BrTableInfo>(&str)
+                .map_err(|e| format!("{}\n{}", e, str))
+                .unwrap()
+        };
+
+        let br_db_info = {
+            let str = String::from_utf8(schema.db).unwrap();
+            serde_json::from_str::<BrDbInfo>(&str)
+                .map_err(|e| format!("{}\n{}", e, str))
+                .unwrap()
+        };
+
+        let table_name = br_table_info.name.original.clone();
+        let db_name = br_db_info.name.original;
+        let table_info = br_table_info.into_table_info_lossy();
+
+        Self {
+            table_info,
+            table_name,
+            db_name,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -105,10 +148,16 @@ mod tests {
         "max_idx_id":0,"max_cst_id":0,"update_timestamp":427397368802967566,"ShardRowIDBits":0,"max_shard_row_id_bits":0,"auto_random_bits":0,
         "pre_split_regions":0,"partition":null,"compression":"","view":null,"sequence":null,"Lock":null,"version":4,"tiflash_replica":null,
         "is_columnar":false,"temp_table_type":0}"#;
-        let br_table_info = serde_json::from_str::<BrTableInfo>(&str)
-            .map_err(|e| format!("{}\n{}", e, str))
-            .unwrap();
+        let br_table_info = serde_json::from_str::<BrTableInfo>(&str).unwrap();
         let table_info = br_table_info.into_table_info_lossy();
         println!("{:?}", table_info);
+    }
+
+    #[test]
+    fn test_db_info() {
+        let str = r#"{"id":3,"db_name":{"O":"__TiDB_BR_Temporary_mysql","L":"__tidb_br_temporary_mysql"},
+        "charset":"utf8mb4","collate":"utf8mb4_bin","state":5}"#;
+        let br_db_info = serde_json::from_str::<BrDbInfo>(str).unwrap();
+        println!("{:?}", br_db_info);
     }
 }

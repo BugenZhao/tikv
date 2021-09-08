@@ -21,7 +21,7 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tokio::runtime;
 
 use crate::{
-    br_models::schema_to_table_info,
+    br_models::RewriteInfo,
     metafile::{mutate_data_files, read_data_files, read_schemas},
     rewrite::rewrite,
     utils::{read_message, write_message},
@@ -115,21 +115,21 @@ async fn worker(opt: Opt) -> Result<()> {
 
     let schemas = read_schemas(&storage, &meta).await?;
 
-    let table_info_map = schemas
+    let info_map = schemas
         .into_iter()
-        .map(|s| schema_to_table_info(s))
-        .map(|ti| (ti.get_table_id(), ti))
+        .map(|s| RewriteInfo::from(s))
+        .map(|ri| (ri.table_info.get_table_id(), ri))
         .collect::<HashMap<_, _>>();
 
     let mut handles = vec![];
     for (table_id, files) in file_map {
-        let table_info = table_info_map.get(&table_id).expect("no table info found");
+        let info = info_map.get(&table_id).expect("no table info found");
         for file in files {
-            let table_info = table_info.clone();
+            let info = info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
             let handle = tokio::task::spawn_blocking(move || {
-                match rewrite(table_id, dir, new_dir, file, table_info, mode) {
+                match rewrite(table_id, dir, new_dir, file, info, mode) {
                     Ok(mutated_file) => {
                         info!("rewrite done"; "file" => &name);
                         Ok((name, mutated_file))

@@ -10,9 +10,8 @@ use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWrit
 use kvproto::brpb::{File, FileFormat};
 use slog_global::warn;
 use structopt::clap::arg_enum;
-use tipb::TableInfo;
 
-use crate::utils::update_file;
+use crate::{br_models::RewriteInfo, utils::update_file};
 
 arg_enum! {
     #[derive(Debug, Clone, Copy)]
@@ -46,7 +45,7 @@ pub fn rewrite(
     dir: impl AsRef<Path>,
     new_dir: impl AsRef<Path>,
     file: File,
-    table_info: TableInfo,
+    info: RewriteInfo,
     mode: RewriteMode,
 ) -> Result<File> {
     let get_path = |dir: &Path| {
@@ -70,7 +69,7 @@ pub fn rewrite(
             reader.verify_checksum()?;
 
             let mut writer = TextWriter::new(
-                table_info,
+                info.table_info,
                 cf,
                 mode.file_format(),
                 &format!("{}.rewrite_tmp", new_path_str),
@@ -94,7 +93,7 @@ pub fn rewrite(
         }
 
         RewriteMode::ToSst => {
-            let mut reader = TextReader::new(path_str, table_info, cf)?;
+            let mut reader = TextReader::new(path_str, info.table_info, cf)?;
             let mut writer = RocksSstWriterBuilder::new()
                 .set_cf(cf)
                 .build(new_path_str)?;
