@@ -116,6 +116,18 @@ pub fn kv_to_write(
     to_text(hr_write)
 }
 
+pub fn kv_to_csv_write(
+    ctx: &mut EvalContext,
+    schema: &Schema,
+    key: &[u8],
+    val: &[u8],
+) -> Option<Result<Vec<u8>>> {
+    let write_ref = WriteRef::parse(val).unwrap();
+    write_ref
+        .short_value
+        .map(|val| kv_to_csv(ctx, schema, key, val))
+}
+
 pub fn write_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
     let HrKvWrite { key, value } = from_text(line);
 

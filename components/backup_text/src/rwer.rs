@@ -3,7 +3,7 @@
 use crate::eval_context;
 use crate::sst_to_text::{
     index_kv_to_text, index_kv_to_write, index_text_to_kv, index_write_to_kv, kv_to_csv,
-    kv_to_text, kv_to_write, text_to_kv, write_to_kv,
+    kv_to_csv_write, kv_to_text, kv_to_write, text_to_kv, write_to_kv,
 };
 use crate::{Error, Result};
 use collections::HashMap;
@@ -141,37 +141,56 @@ impl TextWriter {
     }
 
     pub fn put_line(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
-        if self.data_type.is_none() {
-            self.init_data_type(key)?;
-        }
-        let mut v = match (self.format, self.cf, self.data_type.as_ref().unwrap()) {
-            (FileFormat::Csv, CF_DEFAULT, DataType::Record) => {
-                kv_to_csv(&mut self.ctx, &self.schema, key, val).unwrap()
+        let data_type = {
+            if self.data_type.is_none() {
+                self.init_data_type(key)?;
             }
-            (FileFormat::Csv, ..) => {
-                // No need to write `write_cf` and index data to csv file
-                return Ok(());
-            }
-            (_, CF_DEFAULT, DataType::Record) => {
-                kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
-                    .unwrap()
-                    .into_bytes()
-            }
-            (_, CF_DEFAULT, DataType::Index) => {
-                index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
-                    .unwrap()
-                    .into_bytes()
-            }
-            (_, CF_WRITE, DataType::Record) => {
-                kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
-            }
-            (_, CF_WRITE, DataType::Index) => {
-                index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
-            }
+            self.data_type.as_ref().unwrap()
+        };
+
+        let mut v = match self.format {
+            FileFormat::Text => match (self.cf, data_type) {
+                (CF_DEFAULT, DataType::Record) => {
+                    kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
+                        .unwrap()
+                        .into_bytes()
+                }
+                (CF_DEFAULT, DataType::Index) => {
+                    index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
+                        .unwrap()
+                        .into_bytes()
+                }
+                (CF_WRITE, DataType::Record) => {
+                    kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
+                }
+                (CF_WRITE, DataType::Index) => {
+                    index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
+                }
+                (..) => unreachable!(),
+            },
+            FileFormat::Csv => match (self.cf, data_type) {
+                (CF_DEFAULT, DataType::Record) => {
+                    kv_to_csv(&mut self.ctx, &self.schema, key, val).unwrap()
+                }
+                (CF_WRITE, DataType::Record) => {
+                    if let Some(result) = kv_to_csv_write(&mut self.ctx, &self.schema, key, val) {
+                        result.unwrap()
+                    } else {
+                        return Ok(());
+                    }
+                }
+                (CF_DEFAULT | CF_WRITE, &DataType::Index) => {
+                    // No need to write `write_cf` and index data to csv file
+                    return Ok(());
+                }
+                (..) => unreachable!(),
+            },
             _ => unreachable!(),
         };
+
         v.push(b'\n');
         self.file_size += self.file_writer.write(&v)?;
+
         Ok(())
     }
 
