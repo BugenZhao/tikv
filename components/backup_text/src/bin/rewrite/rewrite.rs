@@ -6,7 +6,9 @@ use std::{
 use anyhow::{anyhow, Result};
 use backup_text::rwer::{TextReader, TextWriter};
 use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
-use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    name_to_cf, ExternalSstFileInfo, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder,
+};
 use kvproto::brpb::{File, FileFormat};
 use slog_global::warn;
 use structopt::clap::arg_enum;
@@ -47,7 +49,7 @@ pub fn rewrite(
     rename_to: Option<String>,
     info: RewriteInfo,
     mode: RewriteMode,
-) -> Result<File> {
+) -> Result<Option<File>> {
     let get_path = |dir: &Path, name: &str| {
         let mut path = PathBuf::from(dir);
         path.push(name);
@@ -67,7 +69,7 @@ pub fn rewrite(
         });
     let new_path_str = new_path.to_str().unwrap();
 
-    match mode {
+    let (new_path, size) = match mode {
         RewriteMode::ToText | RewriteMode::ToCsv => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
@@ -93,7 +95,15 @@ pub fn rewrite(
             }
 
             let _ = writer.finish()?;
-            fs::rename(&temp_path_str, &new_path)?;
+            let size = writer.get_size();
+            if mode == RewriteMode::ToCsv && size == 0 {
+                // remove empty csv files
+                writer.cleanup()?;
+                (None, size)
+            } else {
+                fs::rename(&temp_path_str, &new_path)?;
+                (Some(new_path), size)
+            }
         }
 
         RewriteMode::ToSst => {
@@ -107,26 +117,26 @@ pub fn rewrite(
                 count += 1;
             }
 
-            let _ = writer.finish()?;
+            let info = writer.finish()?;
+            (Some(new_path), info.file_size())
         }
     };
 
     if count != file.get_total_kvs() {
         warn!(
             "kv pairs count mismatched";
-            "file" => path_str,
+            "file" => file.get_name(),
             "count" => count,
             "expected" => file.get_total_kvs()
         );
     }
 
-    let mutated_file = {
-        let name = new_path.file_name().unwrap().to_string_lossy().to_string();
-        let size = fs::metadata(&new_path).unwrap().len();
+    let mutated_file = new_path.map(|p| {
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
         let mut file = file;
         update_file(&mut file, name, size);
         file
-    };
+    });
 
     Ok(mutated_file)
 }

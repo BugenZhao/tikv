@@ -166,7 +166,7 @@ impl TextWriter {
                 (CF_WRITE, DataType::Index) => {
                     index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
                 }
-                (..) => unreachable!(),
+                _ => unreachable!(),
             },
             FileFormat::Csv => match (self.cf, data_type) {
                 (CF_DEFAULT, DataType::Record) => {
@@ -183,7 +183,7 @@ impl TextWriter {
                     // No need to write `write_cf` and index data to csv file
                     return Ok(());
                 }
-                (..) => unreachable!(),
+                _ => unreachable!(),
             },
             _ => unreachable!(),
         };

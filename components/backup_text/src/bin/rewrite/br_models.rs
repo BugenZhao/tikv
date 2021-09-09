@@ -7,8 +7,6 @@ use tipb::{ColumnInfo, TableInfo};
 struct BrCiString {
     #[serde(rename = "O")]
     pub original: String,
-    #[serde(rename = "L")]
-    pub lower: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
