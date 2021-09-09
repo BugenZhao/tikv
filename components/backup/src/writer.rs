@@ -2,6 +2,7 @@
 
 use std::fs::File as StdFile;
 use std::io::{BufReader, Read};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use backup_text::rwer::TextWriter;
@@ -27,10 +28,13 @@ use txn_types::{KvPair, WriteRef};
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
 
+static FILE_NAME_ID_GEN: AtomicU64 = AtomicU64::new(1);
+
 pub trait LocalWriter {
     type LocalReader: Read + Send + 'static;
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
     fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)>;
+    fn name_prefix(&self) -> Option<String>;
     fn cleanup(self) -> Result<()>;
 }
 
@@ -44,6 +48,9 @@ impl LocalWriter for RocksSstWriter {
     fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)> {
         let (sst_info, r) = <RocksSstWriter as SstWriter>::finish_read(self)?;
         Ok((sst_info.file_size(), r))
+    }
+    fn name_prefix(&self) -> Option<String> {
+        None
     }
     fn cleanup(self) -> Result<()> {
         Ok(())
@@ -72,6 +79,10 @@ impl LocalWriter for TextWriter {
             }
             Ok(r) => Ok((size, r)),
         }
+    }
+
+    fn name_prefix(&self) -> Option<String> {
+        self.name_prefix()
     }
 
     fn cleanup(self) -> Result<()> {
@@ -275,7 +286,23 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
     fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter<Self::LW>> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
-        let name = backup_file_name(store_id, &self.region, key);
+        let name = if self.format == FileFormat::Csv {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let peer = self
+                .region
+                .get_peers()
+                .iter()
+                .find(|&p| p.get_store_id() == store_id)
+                .unwrap();
+            let id = FILE_NAME_ID_GEN.fetch_add(1, Ordering::SeqCst);
+            let start = SystemTime::now();
+            let since_the_epoch = start
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards");
+            format!("{}{}{}", id, since_the_epoch.as_millis(), peer.get_id())
+        } else {
+            backup_file_name(store_id, &self.region, key)
+        };
         let (default, write) = (
             TextWriter::new(
                 self.table_info.clone(),
@@ -426,7 +453,10 @@ impl<LW: LocalWriter> BackupWriter<LW> {
         };
         if !self.default.is_empty() {
             // Save default cf contents.
-            let file_name = format!("{}_{}.{}", self.name, CF_DEFAULT, file_suffix(&self.format));
+            let file_name = match self.default.writer.name_prefix() {
+                Some(prefix) => format!("{}.{}.{}", prefix, self.name, file_suffix(&self.format)),
+                None => format!("{}_{}.{}", self.name, CF_DEFAULT, file_suffix(&self.format)),
+            };
             let default = self.default.save_and_build_file(
                 &file_name,
                 CF_DEFAULT,

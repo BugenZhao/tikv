@@ -31,6 +31,7 @@ pub struct TextWriter {
 }
 
 pub struct Schema {
+    pub name: String,
     pub columns: HashMap<i64, ColumnInfo>,
     // `column_ids` preserve the order between each column
     pub column_ids: Vec<i64>,
@@ -52,6 +53,7 @@ impl Schema {
             columns.insert(id, ci);
         }
         Schema {
+            name: table_info.take_name(),
             columns,
             column_ids,
             primary_handle,
@@ -227,6 +229,14 @@ impl TextWriter {
     /// Get a reference to the text writer's name.
     pub fn name(&self) -> &str {
         self.name.as_str()
+    }
+
+    pub fn name_prefix(&self) -> Option<String> {
+        match self.format {
+            FileFormat::Text => None,
+            FileFormat::Csv => Some(self.schema.name.clone()),
+            _ => unreachable!(),
+        }
     }
 }
 

@@ -6,10 +6,11 @@ use std::sync::Arc;
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
+use tidb_query_datatype::FieldTypeTp;
 use tikv_util::buffer_vec::BufferVec;
 use tikv_util::escape;
 
-pub fn write_bytes_to(buf: &mut Vec<u8>, d: &Datum) {
+pub fn write_bytes_to(tp: FieldTypeTp, buf: &mut Vec<u8>, d: &Datum) {
     let s = match d {
         Datum::I64(i) => format!("{}", i),
         Datum::U64(u) => format!("{}", u),
@@ -23,12 +24,17 @@ pub fn write_bytes_to(buf: &mut Vec<u8>, d: &Datum) {
         Datum::Null => "NULL".to_owned(),
         Datum::Max => "MAX".to_owned(),
         Datum::Min => "MIN".to_owned(),
-        Datum::Bytes(ref bs) => {
-            buf.extend("\"".as_bytes());
-            buf.extend(bs);
-            buf.extend("\"".as_bytes());
-            return;
-        }
+        Datum::Bytes(ref bs) => match tp {
+            FieldTypeTp::VarString | FieldTypeTp::String | FieldTypeTp::VarChar => {
+                format!("\"{}\"", escape(bs))
+            }
+            _ => {
+                buf.extend("\"".as_bytes());
+                buf.extend(bs);
+                buf.extend("\"".as_bytes());
+                return;
+            }
+        },
     };
     buf.extend(s.as_bytes());
 }

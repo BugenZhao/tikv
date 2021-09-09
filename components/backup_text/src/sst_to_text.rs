@@ -13,6 +13,7 @@ use crate::{
 use collections::HashMap;
 use tidb_query_datatype::codec::datum::{Datum, DatumDecoder};
 use tidb_query_datatype::codec::table::unflatten;
+use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::{codec::Result as CodecResult, expr::EvalContext};
 use tipb::ColumnInfo;
 use txn_types::WriteRef;
@@ -67,7 +68,7 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        hr_datum::write_bytes_to(&mut res, &d);
+        hr_datum::write_bytes_to(schema.columns[id].tp(), &mut res, &d);
         res.push(b',');
     }
     if !res.is_empty() {
