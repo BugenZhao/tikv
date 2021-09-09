@@ -21,7 +21,7 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tokio::runtime;
 
 use crate::{
-    br_models::schema_to_table_info,
+    br_models::RewriteInfo,
     metafile::{mutate_data_files, read_data_files, read_schemas},
     rewrite::rewrite,
     utils::{read_message, write_message},
@@ -115,23 +115,34 @@ async fn worker(opt: Opt) -> Result<()> {
 
     let schemas = read_schemas(&storage, &meta).await?;
 
-    let table_info_map = schemas
+    let info_map = schemas
         .into_iter()
-        .map(|s| schema_to_table_info(s))
-        .map(|ti| (ti.get_table_id(), ti))
+        .map(|s| RewriteInfo::from(s))
+        .map(|ri| (ri.table_info.get_table_id(), ri))
         .collect::<HashMap<_, _>>();
 
     let mut handles = vec![];
     for (table_id, files) in file_map {
-        let table_info = table_info_map.get(&table_id).expect("no table info found");
-        for file in files {
-            let table_info = table_info.clone();
+        let info = info_map.get(&table_id).expect("no table info found");
+        let name_width = files.len().to_string().len();
+        for (i, file) in files.into_iter().enumerate() {
+            let info = info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
+            let rename_to = (mode == RewriteMode::ToCsv).then(|| {
+                format!(
+                    "{}.{}.{:0width$}.csv",
+                    info.db_name,
+                    info.table_name,
+                    i,
+                    width = name_width
+                )
+            });
             let handle = tokio::task::spawn_blocking(move || {
-                match rewrite(table_id, dir, new_dir, file, table_info, mode) {
+                match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {
-                        info!("rewrite done"; "file" => &name);
+                        let new_name = mutated_file.as_ref().map(|f| f.get_name());
+                        info!("rewrite done"; "from" => &name, "to" => new_name);
                         Ok((name, mutated_file))
                     }
                     Err(e) => {
@@ -151,22 +162,25 @@ async fn worker(opt: Opt) -> Result<()> {
         .unwrap();
     info!("rewrite data files all done");
 
-    let new_meta = {
-        let mut meta = meta;
-        mutate_data_files(&storage, &new_storage, &mut meta, |file| {
-            let mutated_file = mutated_file_map
-                .get(file.get_name())
-                .cloned()
-                .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
-                .unwrap();
-            *file = mutated_file;
-        })
-        .await?;
-        meta
-    };
-
-    write_message(&new_storage, META_FILE, new_meta)?;
-    info!("update meta file done");
+    // Post work
+    match mode {
+        RewriteMode::ToText | RewriteMode::ToSst => {
+            // update meta file for correct restoration
+            let new_meta = mutate_data_files(&storage, &new_storage, meta, |file| {
+                let mutated_file = mutated_file_map
+                    .get(file.get_name())
+                    .cloned()
+                    .flatten()
+                    .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
+                    .unwrap();
+                *file = mutated_file;
+            })
+            .await?;
+            write_message(&new_storage, META_FILE, new_meta)?;
+            info!("update meta file done");
+        }
+        RewriteMode::ToCsv => {}
+    }
 
     Ok(())
 }

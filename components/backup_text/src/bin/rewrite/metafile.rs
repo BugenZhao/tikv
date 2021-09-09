@@ -84,14 +84,14 @@ pub async fn read_data_files(
 pub async fn mutate_data_files(
     storage: &impl ExternalStorage,
     new_storage: &impl ExternalStorage,
-    meta: &mut BackupMeta,
+    mut meta: BackupMeta,
     mut mutate: impl FnMut(&mut BrFile) -> (),
-) -> Result<()> {
+) -> Result<BackupMeta> {
     meta.mut_files().iter_mut().for_each(&mut mutate);
     let mut mutate_fn = |m: &mut MetaFile| {
         m.mut_data_files().iter_mut().for_each(&mut mutate);
     };
     mutate_leaf_meta_file(storage, new_storage, meta.mut_file_index(), &mut mutate_fn).await?;
 
-    Ok(())
+    Ok(meta)
 }

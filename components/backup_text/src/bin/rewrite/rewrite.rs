@@ -6,16 +6,17 @@ use std::{
 use anyhow::{anyhow, Result};
 use backup_text::rwer::{TextReader, TextWriter};
 use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
-use engine_traits::{name_to_cf, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    name_to_cf, ExternalSstFileInfo, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder,
+};
 use kvproto::brpb::{File, FileFormat};
 use slog_global::warn;
 use structopt::clap::arg_enum;
-use tipb::TableInfo;
 
-use crate::utils::update_file;
+use crate::{br_models::RewriteInfo, utils::update_file};
 
 arg_enum! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum RewriteMode {
         ToText,
         ToCsv,
@@ -42,35 +43,39 @@ impl RewriteMode {
 }
 
 pub fn rewrite(
-    _table_id: i64,
     dir: impl AsRef<Path>,
     new_dir: impl AsRef<Path>,
     file: File,
-    table_info: TableInfo,
+    rename_to: Option<String>,
+    info: RewriteInfo,
     mode: RewriteMode,
-) -> Result<File> {
-    let get_path = |dir: &Path| {
+) -> Result<Option<File>> {
+    let get_path = |dir: &Path, name: &str| {
         let mut path = PathBuf::from(dir);
-        path.push(file.get_name());
+        path.push(name);
         path
     };
 
-    let path = get_path(dir.as_ref());
+    let path = get_path(dir.as_ref(), file.get_name());
     let path_str = path.to_str().unwrap();
 
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
     let mut count = 0;
 
-    let new_path = get_path(new_dir.as_ref()).with_extension(mode.extension());
+    let new_path = rename_to
+        .map(|n| get_path(new_dir.as_ref(), &n))
+        .unwrap_or_else(|| {
+            get_path(new_dir.as_ref(), file.get_name()).with_extension(mode.extension())
+        });
     let new_path_str = new_path.to_str().unwrap();
 
-    match mode {
+    let (new_path, size) = match mode {
         RewriteMode::ToText | RewriteMode::ToCsv => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
 
             let mut writer = TextWriter::new(
-                table_info,
+                info.table_info,
                 cf,
                 mode.file_format(),
                 &format!("{}.rewrite_tmp", new_path_str),
@@ -90,11 +95,19 @@ pub fn rewrite(
             }
 
             let _ = writer.finish()?;
-            fs::rename(&temp_path_str, &new_path)?;
+            let size = writer.get_size();
+            if mode == RewriteMode::ToCsv && size == 0 {
+                // remove empty csv files
+                writer.cleanup()?;
+                (None, size)
+            } else {
+                fs::rename(&temp_path_str, &new_path)?;
+                (Some(new_path), size)
+            }
         }
 
         RewriteMode::ToSst => {
-            let mut reader = TextReader::new(path_str, table_info, cf)?;
+            let mut reader = TextReader::new(path_str, info.table_info, cf)?;
             let mut writer = RocksSstWriterBuilder::new()
                 .set_cf(cf)
                 .build(new_path_str)?;
@@ -104,26 +117,26 @@ pub fn rewrite(
                 count += 1;
             }
 
-            let _ = writer.finish()?;
+            let info = writer.finish()?;
+            (Some(new_path), info.file_size())
         }
     };
 
     if count != file.get_total_kvs() {
         warn!(
             "kv pairs count mismatched";
-            "file" => path_str,
+            "file" => file.get_name(),
             "count" => count,
             "expected" => file.get_total_kvs()
         );
     }
 
-    let mutated_file = {
-        let name = new_path.file_name().unwrap().to_string_lossy().to_string();
-        let size = fs::metadata(&new_path).unwrap().len();
+    let mutated_file = new_path.map(|p| {
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
         let mut file = file;
         update_file(&mut file, name, size);
         file
-    };
+    });
 
     Ok(mutated_file)
 }
