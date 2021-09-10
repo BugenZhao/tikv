@@ -140,6 +140,9 @@ impl From<kvproto::brpb::Schema> for RewriteInfo {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::brpb::Schema;
+    use protobuf::Message;
+
     use super::*;
 
     #[test]
@@ -170,5 +173,55 @@ mod tests {
         "charset":"utf8mb4","collate":"utf8mb4_bin","state":5}"#;
         let br_db_info = serde_json::from_str::<BrDbInfo>(str).unwrap();
         println!("{:?}", br_db_info);
+    }
+
+    #[test]
+    fn test_patched_table_info() {
+        let br = || {
+            let ti = BrTableInfo {
+                id: 6,
+                name: BrCiString {
+                    original: "br_name".to_owned(),
+                },
+                ..Default::default()
+            };
+            serde_json::to_vec(&ti).unwrap()
+        };
+        let pb = || {
+            let mut ti = TableInfo::new();
+            ti.set_table_id(2);
+            ti.set_name("test.pb_name".to_owned());
+            ti.write_to_bytes().unwrap()
+        };
+        let db = || {
+            r#"{"id":42,"db_name":{"O":"test","L":"test"},
+        "charset":"utf8mb4","collate":"utf8mb4_bin","state":5}"#
+                .to_string()
+                .into_bytes()
+        };
+
+        {
+            let old = {
+                let mut s = Schema::new();
+                s.set_db(db());
+                s.set_table(br());
+                s
+            };
+            let ri = RewriteInfo::from(old);
+            assert_eq!(ri.name, "test.br_name");
+            assert_eq!(ri.table_info.get_table_id(), 6);
+        }
+        {
+            let patched = {
+                let mut s = Schema::new();
+                s.set_db(db());
+                s.set_table(br());
+                s.set_table_info(pb());
+                s
+            };
+            let ri = RewriteInfo::from(patched);
+            assert_eq!(ri.name, "test.br_name");
+            assert_eq!(ri.table_info.get_table_id(), 2);
+        }
     }
 }
