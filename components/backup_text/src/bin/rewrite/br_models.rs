@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use serde::{Deserialize, Serialize};
+use slog_global::warn;
 use tipb::{ColumnInfo, TableInfo};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -57,6 +58,7 @@ impl BrTableInfo {
 
         let mut ti = TableInfo::default();
         ti.set_table_id(id);
+        ti.set_name(self.name.original);
         ti.set_columns(
             columns
                 .into_iter()
@@ -99,23 +101,37 @@ pub struct RewriteInfo {
 
 impl From<kvproto::brpb::Schema> for RewriteInfo {
     fn from(schema: kvproto::brpb::Schema) -> Self {
-        let br_table_info = {
-            let str = String::from_utf8(schema.table).unwrap();
-            serde_json::from_str::<BrTableInfo>(&str)
+        let kvproto::brpb::Schema {
+            db,
+            table,
+            table_info,
+            ..
+        } = schema;
+
+        let db_name = {
+            let str = String::from_utf8(db).unwrap();
+            let info = serde_json::from_str::<BrDbInfo>(&str)
                 .map_err(|e| format!("{}\n{}", e, str))
-                .unwrap()
+                .unwrap();
+            info.name.original
         };
 
-        let br_db_info = {
-            let str = String::from_utf8(schema.db).unwrap();
-            serde_json::from_str::<BrDbInfo>(&str)
-                .map_err(|e| format!("{}\n{}", e, str))
-                .unwrap()
-        };
+        let table_info = (table_info.is_empty())
+            .then(|| {
+                let str = String::from_utf8(table).unwrap();
+                let br_info = serde_json::from_str::<BrTableInfo>(&str)
+                    .map_err(|e| format!("{}\n{}", e, str))
+                    .unwrap();
+                warn!(
+                    "no tipb::TableInfo found, will convert from br models";
+                    "db" => &db_name,
+                    "table" => &br_info.name.original,
+                );
+                br_info.into_table_info_lossy()
+            })
+            .unwrap_or_else(|| protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap());
 
-        let table_name = br_table_info.name.original.clone();
-        let db_name = br_db_info.name.original;
-        let table_info = br_table_info.into_table_info_lossy();
+        let table_name = table_info.get_name().to_owned();
 
         Self {
             table_info,
