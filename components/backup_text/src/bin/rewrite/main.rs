@@ -41,7 +41,7 @@ struct Opt {
     /// Path to the directory of original backup files
     #[structopt(parse(from_os_str))]
     path: PathBuf,
-    /// Path to the directory of rewritten backup files, `<path>/rewrite` if not present
+    /// Path to the directory of rewritten backup files, `<path>/rewrite.<format>` if not present
     #[structopt(parse(from_os_str))]
     new_path: Option<PathBuf>,
     /// Thread concurrency for rewriting
@@ -92,6 +92,7 @@ async fn worker(opt: Opt) -> Result<()> {
     let new_path = new_path.unwrap_or_else(|| {
         let mut new_path = path.clone();
         new_path.push("rewrite");
+        new_path.set_extension(mode.extension());
         new_path
     });
     let new_storage = {
@@ -129,15 +130,8 @@ async fn worker(opt: Opt) -> Result<()> {
             let info = info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
-            let rename_to = (mode == RewriteMode::ToCsv).then(|| {
-                format!(
-                    "{}.{}.{:0width$}.csv",
-                    info.db_name,
-                    info.table_name,
-                    i,
-                    width = name_width
-                )
-            });
+            let rename_to = (mode == RewriteMode::ToCsv)
+                .then(|| format!("{}.{:0width$}.csv", info.name, i, width = name_width));
             let handle = tokio::task::spawn_blocking(move || {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {

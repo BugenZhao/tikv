@@ -95,8 +95,7 @@ impl BrColumnInfo {
 #[derive(Debug, Default, Clone)]
 pub struct RewriteInfo {
     pub table_info: TableInfo,
-    pub table_name: String,
-    pub db_name: String,
+    pub name: String,
 }
 
 impl From<kvproto::brpb::Schema> for RewriteInfo {
@@ -116,28 +115,26 @@ impl From<kvproto::brpb::Schema> for RewriteInfo {
             info.name.original
         };
 
-        let table_info = (table_info.is_empty())
-            .then(|| {
-                let str = String::from_utf8(table).unwrap();
-                let br_info = serde_json::from_str::<BrTableInfo>(&str)
-                    .map_err(|e| format!("{}\n{}", e, str))
-                    .unwrap();
-                warn!(
-                    "no tipb::TableInfo found, will convert from br models";
-                    "db" => &db_name,
-                    "table" => &br_info.name.original,
-                );
-                br_info.into_table_info_lossy()
-            })
-            .unwrap_or_else(|| protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap());
+        let br_table_info = {
+            let str = String::from_utf8(table).unwrap();
+            serde_json::from_str::<BrTableInfo>(&str)
+                .map_err(|e| format!("{}\n{}", e, str))
+                .unwrap()
+        };
 
-        let table_name = table_info.get_name().to_owned();
+        let name = format!("{}.{}", db_name, br_table_info.name.original);
 
-        Self {
-            table_info,
-            table_name,
-            db_name,
-        }
+        let table_info = if table_info.is_empty() {
+            warn!(
+                "no tipb::TableInfo found, convert from br models";
+                "table" => &name,
+            );
+            br_table_info.into_table_info_lossy()
+        } else {
+            protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap()
+        };
+
+        Self { table_info, name }
     }
 }
 
