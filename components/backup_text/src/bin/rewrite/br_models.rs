@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::brpb::Schema as BrSchema;
 use serde::{Deserialize, Serialize};
+use slog_global::warn;
 use tipb::{ColumnInfo, TableInfo};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -47,7 +49,7 @@ struct BrFieldType {
 }
 
 impl BrTableInfo {
-    pub fn into_table_info_lossy(self) -> TableInfo {
+    pub fn into_table_info_lossy(self, db_name: &str) -> TableInfo {
         let BrTableInfo {
             id,
             columns,
@@ -57,6 +59,7 @@ impl BrTableInfo {
 
         let mut ti = TableInfo::default();
         ti.set_table_id(id);
+        ti.set_name(format!("{}.{}", db_name, self.name.original));
         ti.set_columns(
             columns
                 .into_iter()
@@ -90,43 +93,45 @@ impl BrColumnInfo {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct RewriteInfo {
-    pub table_info: TableInfo,
-    pub table_name: String,
-    pub db_name: String,
-}
+pub fn schema_to_table_info(schema: BrSchema) -> TableInfo {
+    let BrSchema {
+        db,
+        table,
+        table_info,
+        ..
+    } = schema;
 
-impl From<kvproto::brpb::Schema> for RewriteInfo {
-    fn from(schema: kvproto::brpb::Schema) -> Self {
+    if table_info.is_empty() {
         let br_table_info = {
-            let str = String::from_utf8(schema.table).unwrap();
+            let str = String::from_utf8(table).unwrap();
             serde_json::from_str::<BrTableInfo>(&str)
                 .map_err(|e| format!("{}\n{}", e, str))
                 .unwrap()
         };
-
-        let br_db_info = {
-            let str = String::from_utf8(schema.db).unwrap();
-            serde_json::from_str::<BrDbInfo>(&str)
+        let db_name = {
+            let str = String::from_utf8(db).unwrap();
+            let info = serde_json::from_str::<BrDbInfo>(&str)
                 .map_err(|e| format!("{}\n{}", e, str))
-                .unwrap()
+                .unwrap();
+            info.name.original
         };
 
-        let table_name = br_table_info.name.original.clone();
-        let db_name = br_db_info.name.original;
-        let table_info = br_table_info.into_table_info_lossy();
-
-        Self {
-            table_info,
-            table_name,
-            db_name,
-        }
+        let table_info = br_table_info.into_table_info_lossy(&db_name);
+        warn!(
+            "no tipb::TableInfo found, convert from br models";
+            "table" => table_info.get_name(),
+        );
+        table_info
+    } else {
+        protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use kvproto::brpb::Schema;
+    use protobuf::Message;
+
     use super::*;
 
     #[test]
@@ -147,8 +152,9 @@ mod tests {
         "pre_split_regions":0,"partition":null,"compression":"","view":null,"sequence":null,"Lock":null,"version":4,"tiflash_replica":null,
         "is_columnar":false,"temp_table_type":0}"#;
         let br_table_info = serde_json::from_str::<BrTableInfo>(&str).unwrap();
-        let table_info = br_table_info.into_table_info_lossy();
+        let table_info = br_table_info.into_table_info_lossy("foo");
         println!("{:?}", table_info);
+        assert_eq!(table_info.get_name(), "foo.expr_pushdown_blacklist");
     }
 
     #[test]
@@ -157,5 +163,55 @@ mod tests {
         "charset":"utf8mb4","collate":"utf8mb4_bin","state":5}"#;
         let br_db_info = serde_json::from_str::<BrDbInfo>(str).unwrap();
         println!("{:?}", br_db_info);
+    }
+
+    #[test]
+    fn test_patched_table_info() {
+        let br = || {
+            let ti = BrTableInfo {
+                id: 6,
+                name: BrCiString {
+                    original: "br_name".to_owned(),
+                },
+                ..Default::default()
+            };
+            serde_json::to_vec(&ti).unwrap()
+        };
+        let pb = || {
+            let mut ti = TableInfo::new();
+            ti.set_table_id(2);
+            ti.set_name("test.pb_name".to_owned());
+            ti.write_to_bytes().unwrap()
+        };
+        let db = || {
+            r#"{"id":42,"db_name":{"O":"test","L":"test"},
+        "charset":"utf8mb4","collate":"utf8mb4_bin","state":5}"#
+                .to_string()
+                .into_bytes()
+        };
+
+        {
+            let old = {
+                let mut s = Schema::new();
+                s.set_db(db());
+                s.set_table(br());
+                s
+            };
+            let ti = schema_to_table_info(old);
+            assert_eq!(ti.get_name(), "test.br_name");
+            assert_eq!(ti.get_table_id(), 6);
+        }
+        {
+            let patched = {
+                let mut s = Schema::new();
+                s.set_db(db());
+                s.set_table(br());
+                s.set_table_info(pb());
+                s
+            };
+            let ti = schema_to_table_info(patched);
+            assert_eq!(ti.get_name(), "test.pb_name");
+            assert_eq!(ti.get_table_id(), 2);
+        }
     }
 }
