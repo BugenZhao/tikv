@@ -368,3 +368,6 @@ x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
 x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh
+
+rewrite:
+	cargo build --package backup_text --release
