@@ -21,7 +21,7 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tokio::runtime;
 
 use crate::{
-    br_models::RewriteInfo,
+    br_models::schema_to_table_info,
     metafile::{mutate_data_files, read_data_files, read_schemas},
     rewrite::rewrite,
     utils::{read_message, write_message},
@@ -118,8 +118,8 @@ async fn worker(opt: Opt) -> Result<()> {
 
     let info_map = schemas
         .into_iter()
-        .map(|s| RewriteInfo::from(s))
-        .map(|ri| (ri.table_info.get_table_id(), ri))
+        .map(|s| schema_to_table_info(s))
+        .map(|info| (info.get_table_id(), info))
         .collect::<HashMap<_, _>>();
 
     let mut handles = vec![];
@@ -131,7 +131,7 @@ async fn worker(opt: Opt) -> Result<()> {
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
             let rename_to = (mode == RewriteMode::ToCsv)
-                .then(|| format!("{}.{:0width$}.csv", info.name(), i, width = name_width));
+                .then(|| format!("{}.{:0width$}.csv", info.get_name(), i, width = name_width));
             let handle = tokio::task::spawn_blocking(move || {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {

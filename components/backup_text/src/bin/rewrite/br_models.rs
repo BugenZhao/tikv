@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::brpb::Schema as BrSchema;
 use serde::{Deserialize, Serialize};
 use slog_global::warn;
 use tipb::{ColumnInfo, TableInfo};
@@ -92,52 +93,37 @@ impl BrColumnInfo {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct RewriteInfo {
-    pub table_info: TableInfo,
-}
+pub fn schema_to_table_info(schema: BrSchema) -> TableInfo {
+    let BrSchema {
+        db,
+        table,
+        table_info,
+        ..
+    } = schema;
 
-impl RewriteInfo {
-    pub fn name(&self) -> &str {
-        self.table_info.get_name()
-    }
-}
-
-impl From<kvproto::brpb::Schema> for RewriteInfo {
-    fn from(schema: kvproto::brpb::Schema) -> Self {
-        let kvproto::brpb::Schema {
-            db,
-            table,
-            table_info,
-            ..
-        } = schema;
-
-        let table_info = if table_info.is_empty() {
-            let br_table_info = {
-                let str = String::from_utf8(table).unwrap();
-                serde_json::from_str::<BrTableInfo>(&str)
-                    .map_err(|e| format!("{}\n{}", e, str))
-                    .unwrap()
-            };
-            let db_name = {
-                let str = String::from_utf8(db).unwrap();
-                let info = serde_json::from_str::<BrDbInfo>(&str)
-                    .map_err(|e| format!("{}\n{}", e, str))
-                    .unwrap();
-                info.name.original
-            };
-
-            let table_info = br_table_info.into_table_info_lossy(&db_name);
-            warn!(
-                "no tipb::TableInfo found, convert from br models";
-                "table" => table_info.get_name(),
-            );
-            table_info
-        } else {
-            protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap()
+    if table_info.is_empty() {
+        let br_table_info = {
+            let str = String::from_utf8(table).unwrap();
+            serde_json::from_str::<BrTableInfo>(&str)
+                .map_err(|e| format!("{}\n{}", e, str))
+                .unwrap()
+        };
+        let db_name = {
+            let str = String::from_utf8(db).unwrap();
+            let info = serde_json::from_str::<BrDbInfo>(&str)
+                .map_err(|e| format!("{}\n{}", e, str))
+                .unwrap();
+            info.name.original
         };
 
-        Self { table_info }
+        let table_info = br_table_info.into_table_info_lossy(&db_name);
+        warn!(
+            "no tipb::TableInfo found, convert from br models";
+            "table" => table_info.get_name(),
+        );
+        table_info
+    } else {
+        protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap()
     }
 }
 
@@ -211,9 +197,9 @@ mod tests {
                 s.set_table(br());
                 s
             };
-            let ri = RewriteInfo::from(old);
-            assert_eq!(ri.name(), "test.br_name");
-            assert_eq!(ri.table_info.get_table_id(), 6);
+            let ti = schema_to_table_info(old);
+            assert_eq!(ti.get_name(), "test.br_name");
+            assert_eq!(ti.get_table_id(), 6);
         }
         {
             let patched = {
@@ -223,9 +209,9 @@ mod tests {
                 s.set_table_info(pb());
                 s
             };
-            let ri = RewriteInfo::from(patched);
-            assert_eq!(ri.name(), "test.pb_name");
-            assert_eq!(ri.table_info.get_table_id(), 2);
+            let ti = schema_to_table_info(patched);
+            assert_eq!(ti.get_name(), "test.pb_name");
+            assert_eq!(ti.get_table_id(), 2);
         }
     }
 }
