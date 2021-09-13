@@ -21,7 +21,7 @@ pub fn write_bytes_to(tp: FieldTypeTp, buf: &mut Vec<u8>, d: &Datum) {
         Datum::Json(ref d) => format!("\"{}\"", escape(d.to_string().as_bytes())),
         Datum::Enum(ref e) => format!("\"{}\"", e.to_string()),
         Datum::Set(ref s) => format!("\"{}\"", s.to_string()),
-        Datum::Null => "NULL".to_owned(),
+        Datum::Null => "\\N".to_owned(),
         Datum::Max => "MAX".to_owned(),
         Datum::Min => "MIN".to_owned(),
         Datum::Bytes(ref bs) => match tp {
