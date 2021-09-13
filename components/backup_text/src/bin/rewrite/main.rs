@@ -131,7 +131,7 @@ async fn worker(opt: Opt) -> Result<()> {
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
             let rename_to = (mode == RewriteMode::ToCsv)
-                .then(|| format!("{}.{:0width$}.csv", info.name, i, width = name_width));
+                .then(|| format!("{}.{:0width$}.csv", info.name(), i, width = name_width));
             let handle = tokio::task::spawn_blocking(move || {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {

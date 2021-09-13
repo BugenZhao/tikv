@@ -48,7 +48,7 @@ struct BrFieldType {
 }
 
 impl BrTableInfo {
-    pub fn into_table_info_lossy(self) -> TableInfo {
+    pub fn into_table_info_lossy(self, db_name: &str) -> TableInfo {
         let BrTableInfo {
             id,
             columns,
@@ -58,7 +58,7 @@ impl BrTableInfo {
 
         let mut ti = TableInfo::default();
         ti.set_table_id(id);
-        ti.set_name(self.name.original);
+        ti.set_name(format!("{}.{}", db_name, self.name.original));
         ti.set_columns(
             columns
                 .into_iter()
@@ -95,7 +95,12 @@ impl BrColumnInfo {
 #[derive(Debug, Default, Clone)]
 pub struct RewriteInfo {
     pub table_info: TableInfo,
-    pub name: String,
+}
+
+impl RewriteInfo {
+    pub fn name(&self) -> &str {
+        self.table_info.get_name()
+    }
 }
 
 impl From<kvproto::brpb::Schema> for RewriteInfo {
@@ -107,34 +112,32 @@ impl From<kvproto::brpb::Schema> for RewriteInfo {
             ..
         } = schema;
 
-        let db_name = {
-            let str = String::from_utf8(db).unwrap();
-            let info = serde_json::from_str::<BrDbInfo>(&str)
-                .map_err(|e| format!("{}\n{}", e, str))
-                .unwrap();
-            info.name.original
-        };
-
-        let br_table_info = {
-            let str = String::from_utf8(table).unwrap();
-            serde_json::from_str::<BrTableInfo>(&str)
-                .map_err(|e| format!("{}\n{}", e, str))
-                .unwrap()
-        };
-
-        let name = format!("{}.{}", db_name, br_table_info.name.original);
-
         let table_info = if table_info.is_empty() {
+            let br_table_info = {
+                let str = String::from_utf8(table).unwrap();
+                serde_json::from_str::<BrTableInfo>(&str)
+                    .map_err(|e| format!("{}\n{}", e, str))
+                    .unwrap()
+            };
+            let db_name = {
+                let str = String::from_utf8(db).unwrap();
+                let info = serde_json::from_str::<BrDbInfo>(&str)
+                    .map_err(|e| format!("{}\n{}", e, str))
+                    .unwrap();
+                info.name.original
+            };
+
+            let table_info = br_table_info.into_table_info_lossy(&db_name);
             warn!(
                 "no tipb::TableInfo found, convert from br models";
-                "table" => &name,
+                "table" => table_info.get_name(),
             );
-            br_table_info.into_table_info_lossy()
+            table_info
         } else {
             protobuf::parse_from_bytes::<TableInfo>(&table_info).unwrap()
         };
 
-        Self { table_info, name }
+        Self { table_info }
     }
 }
 
@@ -163,8 +166,9 @@ mod tests {
         "pre_split_regions":0,"partition":null,"compression":"","view":null,"sequence":null,"Lock":null,"version":4,"tiflash_replica":null,
         "is_columnar":false,"temp_table_type":0}"#;
         let br_table_info = serde_json::from_str::<BrTableInfo>(&str).unwrap();
-        let table_info = br_table_info.into_table_info_lossy();
+        let table_info = br_table_info.into_table_info_lossy("foo");
         println!("{:?}", table_info);
+        assert_eq!(table_info.get_name(), "foo.expr_pushdown_blacklist");
     }
 
     #[test]
@@ -208,7 +212,7 @@ mod tests {
                 s
             };
             let ri = RewriteInfo::from(old);
-            assert_eq!(ri.name, "test.br_name");
+            assert_eq!(ri.name(), "test.br_name");
             assert_eq!(ri.table_info.get_table_id(), 6);
         }
         {
@@ -220,7 +224,7 @@ mod tests {
                 s
             };
             let ri = RewriteInfo::from(patched);
-            assert_eq!(ri.name, "test.br_name");
+            assert_eq!(ri.name(), "test.pb_name");
             assert_eq!(ri.table_info.get_table_id(), 2);
         }
     }
