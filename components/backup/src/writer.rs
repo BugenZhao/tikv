@@ -19,7 +19,7 @@ use protobuf::Message;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{
-    self, box_err, error,
+    self, box_err, error, info,
     time::{Instant, Limiter},
 };
 use tipb::TableInfo;
@@ -34,6 +34,7 @@ pub trait LocalWriter {
     type LocalReader: Read + Send + 'static;
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
     fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)>;
+    fn file_size(&self) -> Option<u64>;
     fn name_prefix(&self) -> Option<String>;
     fn cleanup(self) -> Result<()>;
 }
@@ -48,6 +49,9 @@ impl LocalWriter for RocksSstWriter {
     fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)> {
         let (sst_info, r) = <RocksSstWriter as SstWriter>::finish_read(self)?;
         Ok((sst_info.file_size(), r))
+    }
+    fn file_size(&self) -> Option<u64> {
+        None
     }
     fn name_prefix(&self) -> Option<String> {
         None
@@ -79,6 +83,10 @@ impl LocalWriter for TextWriter {
             }
             Ok(r) => Ok((size, r)),
         }
+    }
+
+    fn file_size(&self) -> Option<u64> {
+        Some(self.get_size())
     }
 
     fn name_prefix(&self) -> Option<String> {
@@ -178,7 +186,10 @@ impl<LW: LocalWriter> Writer<LW> {
     }
 
     fn is_empty(&self) -> bool {
-        self.total_kvs == 0
+        match self.writer.file_size() {
+            Some(s) => s == 0,
+            None => self.total_kvs == 0,
+        }
     }
 }
 
