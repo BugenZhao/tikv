@@ -7,7 +7,7 @@ mod utils;
 
 use std::{fs, path::PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use collections::HashMap;
 
 use external_storage_export::{create_storage, make_local_backend};
@@ -84,6 +84,8 @@ async fn worker(opt: Opt) -> Result<()> {
         ..
     } = opt;
 
+    info!("running rewrite"; "mode" => mode.description());
+
     let storage = {
         let backend = make_local_backend(&path); // todo: support other backends
         create_storage(&backend)?
@@ -101,7 +103,15 @@ async fn worker(opt: Opt) -> Result<()> {
         create_storage(&backend)?
     };
 
-    let meta: BackupMeta = read_message(&storage, META_FILE).await?;
+    let meta: BackupMeta = read_message(&storage, META_FILE)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to read `{}`: check your usage, or integrity of the input files",
+                META_FILE
+            )
+        })
+        .unwrap();
 
     let file_map = {
         let mut map: HashMap<i64, Vec<File>> = Default::default();
@@ -136,7 +146,7 @@ async fn worker(opt: Opt) -> Result<()> {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {
                         let new_name = mutated_file.as_ref().map(|f| f.get_name());
-                        info!("rewrite done"; "from" => &name, "to" => new_name);
+                        info!("rewrite file done"; "from" => &name, "to" => new_name);
                         Ok((name, mutated_file))
                     }
                     Err(e) => {
