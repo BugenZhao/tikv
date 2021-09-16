@@ -9,46 +9,10 @@ use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
 use engine_traits::{
     name_to_cf, ExternalSstFileInfo, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder,
 };
-use kvproto::brpb::{File, FileFormat};
-use structopt::clap::arg_enum;
+use kvproto::brpb::File;
 use tipb::TableInfo;
 
-use crate::utils::update_file;
-
-arg_enum! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum RewriteMode {
-        ToText,
-        ToCsv,
-        ToSst,
-    }
-}
-
-impl RewriteMode {
-    pub fn extension(&self) -> &'static str {
-        match self {
-            RewriteMode::ToText => "txt",
-            RewriteMode::ToCsv => "csv",
-            RewriteMode::ToSst => "sst",
-        }
-    }
-
-    pub fn file_format(&self) -> FileFormat {
-        match self {
-            RewriteMode::ToText => FileFormat::Text,
-            RewriteMode::ToCsv => FileFormat::Csv,
-            RewriteMode::ToSst => FileFormat::Sst,
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            RewriteMode::ToText => "sst => text",
-            RewriteMode::ToCsv => "sst => csv",
-            RewriteMode::ToSst => "text => sst",
-        }
-    }
-}
+use crate::{opt::RewriteMode, utils::update_file};
 
 pub fn rewrite(
     dir: impl AsRef<Path>,
@@ -77,7 +41,7 @@ pub fn rewrite(
     let new_path_str = new_path.to_str().unwrap();
 
     let (new_path, size) = match mode {
-        RewriteMode::ToText | RewriteMode::ToCsv => {
+        RewriteMode::ToText | RewriteMode::ToCsv { .. } => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
 
@@ -101,7 +65,7 @@ pub fn rewrite(
 
             let _ = writer.finish()?;
             let size = writer.get_size();
-            if mode == RewriteMode::ToCsv && size == 0 {
+            if matches!(mode, RewriteMode::ToCsv { .. }) && size == 0 {
                 // remove empty csv files
                 writer.cleanup()?;
                 (None, size)

@@ -2,6 +2,7 @@
 
 mod br_models;
 mod metafile;
+mod opt;
 mod rewrite;
 mod utils;
 
@@ -13,10 +14,9 @@ use collections::HashMap;
 use external_storage_export::{create_storage, make_local_backend};
 use futures::future::try_join_all;
 use kvproto::brpb::{BackupMeta, File};
-use rewrite::RewriteMode;
+use opt::{Opt, RewriteMode};
 use slog::Drain;
 use slog_global::{error, info};
-use structopt::StructOpt;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tokio::runtime;
 
@@ -29,34 +29,14 @@ use crate::{
 
 const META_FILE: &'static str = "backupmeta";
 
-#[derive(StructOpt)]
-#[structopt(
-    name = "rewrite",
-    about = "Rewrite backup files between `sst` and text formats."
-)]
-struct Opt {
-    /// Rewrite mode, case insensitive
-    #[structopt(possible_values = &RewriteMode::variants(), case_insensitive = true)]
-    mode: RewriteMode,
-    /// Path to the directory of original backup files
-    #[structopt(parse(from_os_str))]
-    path: PathBuf,
-    /// Path to the directory of rewritten backup files, `<path>/rewrite.<format>` if not present
-    #[structopt(parse(from_os_str))]
-    new_path: Option<PathBuf>,
-    /// Thread concurrency for rewriting
-    #[structopt(short, long, default_value = "8")]
-    threads: usize,
-}
-
-fn check_mode<'a>(mode: RewriteMode, files: &[File]) -> Result<()> {
+fn check_mode<'a>(mode: &RewriteMode, files: &[File]) -> Result<()> {
     let bad_files = files
         .iter()
         .map(|f| PathBuf::from(f.get_name()))
         .filter(|path| {
             let ext = path.extension().unwrap_or_default();
             let ok = match (ext.to_str().unwrap(), mode) {
-                ("sst", RewriteMode::ToText | RewriteMode::ToCsv) => true,
+                ("sst", RewriteMode::ToText | RewriteMode::ToCsv { .. }) => true,
                 ("txt", RewriteMode::ToSst) => true,
                 ("csv", _) => false, // cannot rewrite csv to any other formats
                 _ => false,
@@ -69,7 +49,7 @@ fn check_mode<'a>(mode: RewriteMode, files: &[File]) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow!(
-            "bad rewrite mode `{}` on files: {:#?}",
+            "bad rewrite mode `{:?}` on files: {:#?}",
             mode,
             bad_files
         ))
@@ -116,7 +96,7 @@ async fn worker(opt: Opt) -> Result<()> {
     let file_map = {
         let mut map: HashMap<i64, Vec<File>> = Default::default();
         let files = read_data_files(&storage, &meta).await?;
-        check_mode(mode, &files)?;
+        check_mode(&mode, &files)?;
         for file in files {
             let table_id = decode_table_id(file.get_start_key())?;
             map.entry(table_id).or_default().push(file);
@@ -140,7 +120,7 @@ async fn worker(opt: Opt) -> Result<()> {
             let info = info.clone();
             let (dir, new_dir) = (path.clone(), new_path.clone());
             let name = file.get_name().to_owned();
-            let rename_to = (mode == RewriteMode::ToCsv)
+            let rename_to = matches!(mode, RewriteMode::ToCsv { .. })
                 .then(|| format!("{}.{:0width$}.csv", info.get_name(), i, width = name_width));
             let handle = tokio::task::spawn_blocking(move || {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
@@ -183,14 +163,27 @@ async fn worker(opt: Opt) -> Result<()> {
             write_message(&new_storage, META_FILE, new_meta)?;
             info!("update meta file done");
         }
-        RewriteMode::ToCsv => {}
+        RewriteMode::ToCsv { copy_schema_sql } => {
+            // copy schema sql if present and needed
+            if copy_schema_sql {
+                for entry in fs::read_dir(&path)? {
+                    let file_path = entry?.path();
+                    let name = file_path.file_name().unwrap_or_default().to_string_lossy();
+                    if file_path.is_file() && name.ends_with("-schema.sql") {
+                        let mut new_file_path = new_path.clone();
+                        new_file_path.push(name.as_ref());
+                        fs::copy(file_path, new_file_path)?;
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
 fn main() {
-    let opt: Opt = Opt::from_args();
+    let opt: Opt = structopt::StructOpt::from_args();
 
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
