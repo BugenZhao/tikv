@@ -166,6 +166,7 @@ async fn worker(opt: Opt) -> Result<()> {
         RewriteMode::ToCsv { copy_schema_sql } => {
             // copy schema sql if present and needed
             if copy_schema_sql {
+                let mut count = 0;
                 for entry in fs::read_dir(&path)? {
                     let file_path = entry?.path();
                     let name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -173,8 +174,10 @@ async fn worker(opt: Opt) -> Result<()> {
                         let mut new_file_path = new_path.clone();
                         new_file_path.push(name.as_ref());
                         fs::copy(file_path, new_file_path)?;
+                        count += 1;
                     }
                 }
+                info!("copy schema sqls done"; "count" => count);
             }
         }
     }
