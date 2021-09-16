@@ -10,7 +10,6 @@ use engine_traits::{
     name_to_cf, ExternalSstFileInfo, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder,
 };
 use kvproto::brpb::{File, FileFormat};
-use slog_global::warn;
 use structopt::clap::arg_enum;
 use tipb::TableInfo;
 
@@ -41,6 +40,14 @@ impl RewriteMode {
             RewriteMode::ToSst => FileFormat::Sst,
         }
     }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            RewriteMode::ToText => "sst => text",
+            RewriteMode::ToCsv => "sst => csv",
+            RewriteMode::ToSst => "text => sst",
+        }
+    }
 }
 
 pub fn rewrite(
@@ -60,8 +67,7 @@ pub fn rewrite(
     let path = get_path(dir.as_ref(), file.get_name());
     let path_str = path.to_str().unwrap();
 
-    let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name"))?;
-    let mut count = 0;
+    let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name: {}", file.get_cf()))?;
 
     let new_path = rename_to
         .map(|n| get_path(new_dir.as_ref(), &n))
@@ -90,8 +96,6 @@ pub fn rewrite(
                 let key = iter.key();
                 let value = iter.value();
                 writer.put_line(key, &value)?;
-
-                count += 1;
                 iter.next()?;
             }
 
@@ -115,22 +119,12 @@ pub fn rewrite(
 
             while let Some((key, value)) = reader.pop_kv()? {
                 writer.put(&key, &value)?;
-                count += 1;
             }
 
             let info = writer.finish()?;
             (Some(new_path), info.file_size())
         }
     };
-
-    if count != file.get_total_kvs() {
-        warn!(
-            "kv pairs count mismatched";
-            "file" => file.get_name(),
-            "count" => count,
-            "expected" => file.get_total_kvs()
-        );
-    }
 
     let mutated_file = new_path.map(|p| {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
