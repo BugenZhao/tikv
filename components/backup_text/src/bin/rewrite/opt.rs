@@ -8,7 +8,7 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 #[structopt(
     name = "rewrite",
-    about = "Rewrite backup files between `sst` and text formats."
+    about = "Rewrite backup files between `sst` and other formats."
 )]
 pub struct Opt {
     /// Rewrite mode
@@ -17,7 +17,7 @@ pub struct Opt {
     /// Path to the directory of original files
     #[structopt(name = "input", short, long, parse(from_os_str))]
     pub path: PathBuf,
-    /// Path to the directory of rewritten files, `<path>/rewrite.<format>` if not present
+    /// Path to the directory of rewritten files, `<input>/rewrite.<format>` if not present
     #[structopt(name = "output", short, long, parse(from_os_str))]
     pub new_path: Option<PathBuf>,
     /// Thread concurrency for rewriting
