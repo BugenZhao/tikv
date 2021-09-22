@@ -200,7 +200,8 @@ impl TextWriter {
         };
 
         v.push(b'\n');
-        self.file_size += self.file_writer.write(&v)?;
+        self.file_writer.write_all(&v)?;
+        self.file_size += v.len(); // todo: bad size
 
         Ok(())
     }
@@ -212,9 +213,9 @@ impl TextWriter {
         let dt = DataType::new(&raw_key).unwrap();
         if self.format != FileFormat::Csv {
             // Write the data type header for text file
-            self.file_size += self
-                .file_writer
-                .write(format!("{}\n", dt.to_string()).as_bytes())?;
+            let header = format!("{}\n", dt.to_string()).into_bytes();
+            self.file_writer.write_all(&header)?;
+            self.file_size += header.len();  // todo: bad size
         }
         self.data_type = Some(dt);
         Ok(())
