@@ -41,15 +41,23 @@ pub fn rewrite(
     let new_path_str = new_path.to_str().unwrap();
 
     let (new_path, size) = match mode {
-        RewriteMode::ToText | RewriteMode::ToCsv { .. } => {
+        RewriteMode::ToText | RewriteMode::ToZtext | RewriteMode::ToCsv { .. } => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
+
+            let compressed = match mode {
+                RewriteMode::ToText => false,
+                RewriteMode::ToZtext => true,
+                RewriteMode::ToCsv { .. } => false,
+                _ => unreachable!(),
+            };
 
             let mut writer = TextWriter::new(
                 table_info,
                 cf,
                 mode.file_format(),
                 &format!("{}.rewrite_tmp", new_path_str),
+                compressed,
             )?;
             let temp_path_str = writer.name().to_owned();
 
@@ -76,7 +84,9 @@ pub fn rewrite(
         }
 
         RewriteMode::ToSst => {
-            let mut reader = TextReader::new(path_str, table_info, cf)?;
+            let compressed_text =
+                path.extension().unwrap_or_default() == RewriteMode::ToZtext.extension();
+            let mut reader = TextReader::new(path_str, table_info, cf, compressed_text)?;
             let mut writer = RocksSstWriterBuilder::new()
                 .set_cf(cf)
                 .build(new_path_str)?;

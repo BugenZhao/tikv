@@ -320,12 +320,14 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
                 CF_DEFAULT,
                 self.format.clone(),
                 &name,
+                false, // todo: option for compression
             )?,
             TextWriter::new(
                 self.table_info.clone(),
                 CF_WRITE,
                 self.format.clone(),
                 &name,
+                false, // todo: option for compression
             )?,
         );
         BackupWriter::<TextWriter>::new(

@@ -19,6 +19,7 @@ protobuf-codec = [
 codec = { path = "../codec", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 keys = { path = "../keys", default-features = false }
 lazy_static = "1.3"
 tikv_util = { path = "../tikv_util", default-features = false }
