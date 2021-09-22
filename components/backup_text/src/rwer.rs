@@ -114,7 +114,7 @@ impl TextWriter {
         cf: CfName,
         format: FileFormat,
         name: &str,
-        compressed: bool,
+        compression_level: Option<u32>,
     ) -> io::Result<TextWriter> {
         let name = format!("{}_{}", name, cf);
         let file = match OpenOptions::new()
@@ -130,8 +130,8 @@ impl TextWriter {
             }
         };
         let buf_writer = BufWriter::new(file);
-        let file_writer: Box<dyn Write> = if compressed {
-            Box::new(ZlibEncoder::new(buf_writer, Compression::default()))
+        let file_writer: Box<dyn Write> = if let Some(level) = compression_level {
+            Box::new(ZlibEncoder::new(buf_writer, Compression::new(level)))
         } else {
             Box::new(buf_writer)
         };
