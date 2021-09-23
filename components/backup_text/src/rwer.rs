@@ -22,13 +22,73 @@ use tikv_util::error;
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::Key;
 
+trait CountedWrite: Write {
+    fn get_size(&self) -> u64;
+    fn finish(&mut self) -> io::Result<()>;
+}
+
+struct CountedWriter<W> {
+    file_size: u64,
+    writer: W,
+}
+
+impl<W: Write> CountedWriter<W> {
+    fn new(writer: W) -> Self {
+        Self {
+            file_size: 0,
+            writer,
+        }
+    }
+}
+
+impl<W: Write> Write for CountedWriter<W> {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let result = self.writer.write(buf);
+        if let Ok(size) = result {
+            self.file_size += size as u64;
+        }
+        result
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<W: Write> CountedWrite for CountedWriter<W> {
+    #[inline]
+    fn get_size(&self) -> u64 {
+        self.file_size
+    }
+
+    #[inline]
+    fn finish(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<W: Write> CountedWrite for ZlibEncoder<W> {
+    #[inline]
+    fn get_size(&self) -> u64 {
+        self.total_out()
+    }
+
+    #[inline]
+    fn finish(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.try_finish()?; // attempt to write out final chunks of data
+        Ok(())
+    }
+}
+
 pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     format: FileFormat,
-    file_writer: Box<dyn Write>,
+    file_writer: Box<dyn CountedWrite>,
     schema: Schema,
-    file_size: usize,
     name: String,
     cf: CfName,
 }
@@ -130,25 +190,25 @@ impl TextWriter {
             }
         };
         let buf_writer = BufWriter::new(file);
-        let file_writer: Box<dyn Write> = if let Some(level) = compression_level {
+        let file_writer: Box<dyn CountedWrite> = if let Some(level) = compression_level {
             Box::new(ZlibEncoder::new(buf_writer, Compression::new(level)))
         } else {
-            Box::new(buf_writer)
+            Box::new(CountedWriter::new(buf_writer))
         };
         Ok(TextWriter {
             ctx: eval_context(),
             data_type: None,
             format,
-            file_writer: Box::new(file_writer),
+            file_writer,
             schema: Schema::new(table_info),
-            file_size: 0,
             name: name.to_owned(),
             cf,
         })
     }
 
+    /// The result may be inaccurate unless `finish` is called 
     pub fn get_size(&self) -> u64 {
-        self.file_size as u64
+        self.file_writer.get_size()
     }
 
     pub fn put_line(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
@@ -201,7 +261,6 @@ impl TextWriter {
 
         v.push(b'\n');
         self.file_writer.write_all(&v)?;
-        self.file_size += v.len(); // todo: bad size
 
         Ok(())
     }
@@ -213,22 +272,23 @@ impl TextWriter {
         let dt = DataType::new(&raw_key).unwrap();
         if self.format != FileFormat::Csv {
             // Write the data type header for text file
-            let header = format!("{}\n", dt.to_string()).into_bytes();
-            self.file_writer.write_all(&header)?;
-            self.file_size += header.len();  // todo: bad size
+            self.file_writer
+                .write_fmt(format_args!("{}\n", dt.to_string()))?;
         }
         self.data_type = Some(dt);
         Ok(())
     }
 
-    pub fn finish(&mut self) -> io::Result<()> {
-        self.file_writer.flush()
+    pub fn finish(&mut self) -> io::Result<u64> {
+        self.file_writer.finish()?;
+        Ok(self.get_size())
     }
 
-    pub fn finish_read(&mut self) -> io::Result<BufReader<File>> {
-        self.file_writer.flush()?;
-        Ok(BufReader::new(
-            OpenOptions::new().read(true).open(&self.name)?,
+    pub fn finish_read(&mut self) -> io::Result<(u64, BufReader<File>)> {
+        self.file_writer.finish()?;
+        Ok((
+            self.get_size(),
+            BufReader::new(OpenOptions::new().read(true).open(&self.name)?),
         ))
     }
 

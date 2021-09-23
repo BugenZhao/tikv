@@ -71,8 +71,7 @@ pub fn rewrite(
                 iter.next()?;
             }
 
-            let _ = writer.finish()?;
-            let size = writer.get_size();
+            let size = writer.finish()?;
             if matches!(mode, RewriteMode::ToCsv { .. }) && size == 0 {
                 // remove empty csv files
                 writer.cleanup()?;
@@ -95,8 +94,8 @@ pub fn rewrite(
                 writer.put(&key, &value)?;
             }
 
-            let info = writer.finish()?;
-            (Some(new_path), info.file_size())
+            let size = writer.finish()?.file_size();
+            (Some(new_path), size)
         }
     };
 

@@ -129,7 +129,8 @@ async fn worker(opt: Opt) -> Result<()> {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {
                         let new_name = mutated_file.as_ref().map(|f| f.get_name());
-                        info!("rewrite file done"; "from" => &name, "to" => new_name);
+                        let new_size = mutated_file.as_ref().map(|f| f.get_size());
+                        info!("rewrite file done"; "from" => &name, "to" => new_name, "new_size" => new_size);
                         Ok((name, mutated_file))
                     }
                     Err(e) => {
