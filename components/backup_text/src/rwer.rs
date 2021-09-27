@@ -22,72 +22,11 @@ use tikv_util::error;
 use tipb::{ColumnInfo, TableInfo};
 use txn_types::Key;
 
-trait CountedWrite: Write {
-    fn get_size(&self) -> u64;
-    fn finish(&mut self) -> io::Result<()>;
-}
-
-struct CountedWriter<W> {
-    file_size: u64,
-    writer: W,
-}
-
-impl<W: Write> CountedWriter<W> {
-    fn new(writer: W) -> Self {
-        Self {
-            file_size: 0,
-            writer,
-        }
-    }
-}
-
-impl<W: Write> Write for CountedWriter<W> {
-    #[inline]
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let result = self.writer.write(buf);
-        if let Ok(size) = result {
-            self.file_size += size as u64;
-        }
-        result
-    }
-
-    #[inline]
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
-}
-
-impl<W: Write> CountedWrite for CountedWriter<W> {
-    #[inline]
-    fn get_size(&self) -> u64 {
-        self.file_size
-    }
-
-    #[inline]
-    fn finish(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
-}
-
-impl<W: Write> CountedWrite for ZlibEncoder<W> {
-    #[inline]
-    fn get_size(&self) -> u64 {
-        self.total_out()
-    }
-
-    #[inline]
-    fn finish(&mut self) -> io::Result<()> {
-        self.flush()?;
-        self.try_finish()?; // attempt to write out final chunks of data
-        Ok(())
-    }
-}
-
 pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     format: FileFormat,
-    file_writer: Box<dyn CountedWrite>,
+    file_writer: Option<Box<dyn Write>>,
     schema: Schema,
     name: String,
     cf: CfName,
@@ -190,25 +129,27 @@ impl TextWriter {
             }
         };
         let buf_writer = BufWriter::new(file);
-        let file_writer: Box<dyn CountedWrite> = if let Some(level) = compression_level {
+        let file_writer: Box<dyn Write> = if let Some(level) = compression_level {
             Box::new(ZlibEncoder::new(buf_writer, Compression::new(level)))
         } else {
-            Box::new(CountedWriter::new(buf_writer))
+            Box::new(buf_writer)
         };
         Ok(TextWriter {
             ctx: eval_context(),
             data_type: None,
             format,
-            file_writer,
+            file_writer: Some(file_writer),
             schema: Schema::new(table_info),
             name: name.to_owned(),
             cf,
         })
     }
 
-    /// The result may be inaccurate unless `finish` is called 
+    /// The value may be inaccurate unless `finish` is called
     pub fn get_size(&self) -> u64 {
-        self.file_writer.get_size()
+        fs::metadata(&self.name)
+            .map(|m| m.len())
+            .unwrap_or_default()
     }
 
     pub fn put_line(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
@@ -260,7 +201,7 @@ impl TextWriter {
         };
 
         v.push(b'\n');
-        self.file_writer.write_all(&v)?;
+        self.writer().write_all(&v)?;
 
         Ok(())
     }
@@ -272,7 +213,7 @@ impl TextWriter {
         let dt = DataType::new(&raw_key).unwrap();
         if self.format != FileFormat::Csv {
             // Write the data type header for text file
-            self.file_writer
+            self.writer()
                 .write_fmt(format_args!("{}\n", dt.to_string()))?;
         }
         self.data_type = Some(dt);
@@ -280,12 +221,12 @@ impl TextWriter {
     }
 
     pub fn finish(&mut self) -> io::Result<u64> {
-        self.file_writer.finish()?;
+        self.close_writer()?;
         Ok(self.get_size())
     }
 
     pub fn finish_read(&mut self) -> io::Result<(u64, BufReader<File>)> {
-        self.file_writer.finish()?;
+        self.close_writer()?;
         Ok((
             self.get_size(),
             BufReader::new(OpenOptions::new().read(true).open(&self.name)?),
@@ -307,6 +248,18 @@ impl TextWriter {
             FileFormat::Csv => Some(self.schema.name.clone()),
             _ => unreachable!(),
         }
+    }
+
+    /// Get a mutable reference to the text writer's file writer.
+    #[inline]
+    fn writer(&mut self) -> &mut Box<dyn Write> {
+        self.file_writer.as_mut().expect("writer has been closed")
+    }
+
+    fn close_writer(&mut self) -> io::Result<()> {
+        let mut w = self.file_writer.take().expect("writer has been closed");
+        w.flush()
+        // writer is then dropped here
     }
 }
 
