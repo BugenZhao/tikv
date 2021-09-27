@@ -75,13 +75,12 @@ impl LocalWriter for TextWriter {
     }
 
     fn finish_read(&mut self) -> Result<(u64, Self::LocalReader)> {
-        let size = self.get_size();
         match self.finish_read() {
             Err(e) => {
                 error!("TextWriter get reader failed"; "err" => ?e);
                 Err(e.into())
             }
-            Ok(r) => Ok((size, r)),
+            Ok(r) => Ok(r),
         }
     }
 
@@ -320,12 +319,14 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
                 CF_DEFAULT,
                 self.format.clone(),
                 &name,
+                None, // todo: option for compression
             )?,
             TextWriter::new(
                 self.table_info.clone(),
                 CF_WRITE,
                 self.format.clone(),
                 &name,
+                None, // todo: option for compression
             )?,
         );
         BackupWriter::<TextWriter>::new(

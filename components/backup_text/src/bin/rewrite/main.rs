@@ -36,8 +36,11 @@ fn check_mode<'a>(mode: &RewriteMode, files: &[File]) -> Result<()> {
         .filter(|path| {
             let ext = path.extension().unwrap_or_default();
             let ok = match (ext.to_str().unwrap(), mode) {
-                ("sst", RewriteMode::ToText | RewriteMode::ToCsv { .. }) => true,
-                ("txt", RewriteMode::ToSst) => true,
+                (
+                    "sst",
+                    RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToCsv { .. },
+                ) => true,
+                ("txt" | "ztxt", RewriteMode::ToSst) => true,
                 ("csv", _) => false, // cannot rewrite csv to any other formats
                 _ => false,
             };
@@ -126,7 +129,8 @@ async fn worker(opt: Opt) -> Result<()> {
                 match rewrite(dir, new_dir, file, rename_to, info, mode) {
                     Ok(mutated_file) => {
                         let new_name = mutated_file.as_ref().map(|f| f.get_name());
-                        info!("rewrite file done"; "from" => &name, "to" => new_name);
+                        let new_size = mutated_file.as_ref().map(|f| f.get_size());
+                        info!("rewrite file done"; "from" => &name, "to" => new_name, "new_size" => new_size);
                         Ok((name, mutated_file))
                     }
                     Err(e) => {
@@ -148,7 +152,7 @@ async fn worker(opt: Opt) -> Result<()> {
 
     // Post work
     match mode {
-        RewriteMode::ToText | RewriteMode::ToSst => {
+        RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToSst { .. } => {
             // update meta file for correct restoration
             let new_meta = mutate_data_files(&storage, &new_storage, meta, |file| {
                 let mutated_file = mutated_file_map

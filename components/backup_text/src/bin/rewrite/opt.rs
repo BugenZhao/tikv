@@ -31,6 +31,13 @@ pub enum RewriteMode {
     /// Rewrite from SST to (JSON based) text
     #[structopt(name = "sst-to-text")]
     ToText,
+    /// Rewrite from SST to zlib-compressed (JSON based) text
+    #[structopt(name = "sst-to-ztext")]
+    ToZtext {
+        /// Level for compressing texts, will be clamped into 0..=9. Lower is faster
+        #[structopt(short, long, default_value = "1")]
+        level: u32,
+    },
     /// Rewrite from SST to (tidb-lightning compatible) CSV
     #[structopt(name = "sst-to-csv")]
     ToCsv {
@@ -47,6 +54,7 @@ impl RewriteMode {
     pub fn extension(&self) -> &'static str {
         match self {
             RewriteMode::ToText => "txt",
+            RewriteMode::ToZtext { .. } => "ztxt",
             RewriteMode::ToCsv { .. } => "csv",
             RewriteMode::ToSst => "sst",
         }
@@ -54,7 +62,8 @@ impl RewriteMode {
 
     pub fn file_format(&self) -> FileFormat {
         match self {
-            RewriteMode::ToText => FileFormat::Text,
+            RewriteMode::ToText { .. } => FileFormat::Text,
+            RewriteMode::ToZtext { .. } => FileFormat::Text,
             RewriteMode::ToCsv { .. } => FileFormat::Csv,
             RewriteMode::ToSst => FileFormat::Sst,
         }
@@ -62,7 +71,8 @@ impl RewriteMode {
 
     pub fn description(&self) -> &'static str {
         match self {
-            RewriteMode::ToText => "sst => text",
+            RewriteMode::ToText { .. } => "sst => text",
+            RewriteMode::ToZtext { .. } => "sst => compressed text",
             RewriteMode::ToCsv { .. } => "sst => csv",
             RewriteMode::ToSst => "text => sst",
         }

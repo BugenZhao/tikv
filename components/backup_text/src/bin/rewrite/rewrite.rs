@@ -41,15 +41,23 @@ pub fn rewrite(
     let new_path_str = new_path.to_str().unwrap();
 
     let (new_path, size) = match mode {
-        RewriteMode::ToText | RewriteMode::ToCsv { .. } => {
+        RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToCsv { .. } => {
             let reader = RocksSstReader::open(path_str)?;
             reader.verify_checksum()?;
+
+            let compression_level = match mode {
+                RewriteMode::ToText => None,
+                RewriteMode::ToZtext { level } => Some(level.clamp(0, 9)),
+                RewriteMode::ToCsv { .. } => None,
+                _ => unreachable!(),
+            };
 
             let mut writer = TextWriter::new(
                 table_info,
                 cf,
                 mode.file_format(),
                 &format!("{}.rewrite_tmp", new_path_str),
+                compression_level,
             )?;
             let temp_path_str = writer.name().to_owned();
 
@@ -63,8 +71,7 @@ pub fn rewrite(
                 iter.next()?;
             }
 
-            let _ = writer.finish()?;
-            let size = writer.get_size();
+            let size = writer.finish()?;
             if matches!(mode, RewriteMode::ToCsv { .. }) && size == 0 {
                 // remove empty csv files
                 writer.cleanup()?;
@@ -76,7 +83,9 @@ pub fn rewrite(
         }
 
         RewriteMode::ToSst => {
-            let mut reader = TextReader::new(path_str, table_info, cf)?;
+            let compressed_text = path.extension().unwrap_or_default()
+                == RewriteMode::ToZtext { level: 1 }.extension();
+            let mut reader = TextReader::new(path_str, table_info, cf, compressed_text)?;
             let mut writer = RocksSstWriterBuilder::new()
                 .set_cf(cf)
                 .build(new_path_str)?;
@@ -85,8 +94,8 @@ pub fn rewrite(
                 writer.put(&key, &value)?;
             }
 
-            let info = writer.finish()?;
-            (Some(new_path), info.file_size())
+            let size = writer.finish()?.file_size();
+            (Some(new_path), size)
         }
     };
 

@@ -8,6 +8,9 @@ use crate::sst_to_text::{
 use crate::{Error, Result};
 use collections::HashMap;
 use engine_traits::{CfName, SeekKey, CF_DEFAULT, CF_WRITE};
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use kvproto::brpb::FileFormat;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Lines, Write};
@@ -23,9 +26,8 @@ pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     format: FileFormat,
-    file_writer: BufWriter<File>,
+    file_writer: Option<Box<dyn Write>>,
     schema: Schema,
-    file_size: usize,
     name: String,
     cf: CfName,
 }
@@ -111,6 +113,7 @@ impl TextWriter {
         cf: CfName,
         format: FileFormat,
         name: &str,
+        compression_level: Option<u32>,
     ) -> io::Result<TextWriter> {
         let name = format!("{}_{}", name, cf);
         let file = match OpenOptions::new()
@@ -125,21 +128,28 @@ impl TextWriter {
                 return Err(e);
             }
         };
-        let file_writer = BufWriter::new(file);
+        let buf_writer = BufWriter::new(file);
+        let file_writer: Box<dyn Write> = if let Some(level) = compression_level {
+            Box::new(ZlibEncoder::new(buf_writer, Compression::new(level)))
+        } else {
+            Box::new(buf_writer)
+        };
         Ok(TextWriter {
             ctx: eval_context(),
             data_type: None,
             format,
-            file_writer,
+            file_writer: Some(file_writer),
             schema: Schema::new(table_info),
-            file_size: 0,
             name: name.to_owned(),
             cf,
         })
     }
 
+    /// The value may be inaccurate unless `finish` is called
     pub fn get_size(&self) -> u64 {
-        self.file_size as u64
+        fs::metadata(&self.name)
+            .map(|m| m.len())
+            .unwrap_or_default()
     }
 
     pub fn put_line(&mut self, key: &[u8], val: &[u8]) -> io::Result<()> {
@@ -191,7 +201,7 @@ impl TextWriter {
         };
 
         v.push(b'\n');
-        self.file_size += self.file_writer.write(&v)?;
+        self.writer().write_all(&v)?;
 
         Ok(())
     }
@@ -203,22 +213,23 @@ impl TextWriter {
         let dt = DataType::new(&raw_key).unwrap();
         if self.format != FileFormat::Csv {
             // Write the data type header for text file
-            self.file_size += self
-                .file_writer
-                .write(format!("{}\n", dt.to_string()).as_bytes())?;
+            self.writer()
+                .write_fmt(format_args!("{}\n", dt.to_string()))?;
         }
         self.data_type = Some(dt);
         Ok(())
     }
 
-    pub fn finish(&mut self) -> io::Result<()> {
-        self.file_writer.flush()
+    pub fn finish(&mut self) -> io::Result<u64> {
+        self.close_writer()?;
+        Ok(self.get_size())
     }
 
-    pub fn finish_read(&mut self) -> io::Result<BufReader<File>> {
-        self.file_writer.flush()?;
-        Ok(BufReader::new(
-            OpenOptions::new().read(true).open(&self.name)?,
+    pub fn finish_read(&mut self) -> io::Result<(u64, BufReader<File>)> {
+        self.close_writer()?;
+        Ok((
+            self.get_size(),
+            BufReader::new(OpenOptions::new().read(true).open(&self.name)?),
         ))
     }
 
@@ -238,25 +249,49 @@ impl TextWriter {
             _ => unreachable!(),
         }
     }
+
+    /// Get a mutable reference to the text writer's file writer.
+    #[inline]
+    fn writer(&mut self) -> &mut Box<dyn Write> {
+        self.file_writer.as_mut().expect("writer has been closed")
+    }
+
+    fn close_writer(&mut self) -> io::Result<()> {
+        let mut w = self.file_writer.take().expect("writer has been closed");
+        w.flush()
+        // writer is then dropped here
+    }
 }
 
 pub struct TextReader {
     ctx: EvalContext,
     data_type: DataType,
-    lines_reader: Lines<BufReader<File>>,
+    lines_reader: Lines<Box<dyn BufRead>>,
     next_kv: Option<(Vec<u8>, Vec<u8>)>,
     cf: String,
 }
 
 impl TextReader {
-    pub fn new(path: &str, _table_info: TableInfo, cf: &str) -> io::Result<TextReader> {
-        let mut lines_reader = match OpenOptions::new().read(true).open(path) {
-            Ok(f) => BufReader::new(f).lines(),
+    pub fn new(
+        path: &str,
+        _table_info: TableInfo,
+        cf: &str,
+        compressed: bool,
+    ) -> io::Result<TextReader> {
+        let reader: Box<dyn BufRead> = match OpenOptions::new().read(true).open(path) {
+            Ok(f) => {
+                if compressed {
+                    Box::new(BufReader::new(ZlibDecoder::new(f)))
+                } else {
+                    Box::new(BufReader::new(f))
+                }
+            }
             Err(e) => {
                 error!("failed to open file"; "err" => ?e, "path" => path);
                 return Err(e);
             }
         };
+        let mut lines_reader = reader.lines();
         let data_type = match lines_reader.next() {
             Some(l) => DataType::from_str((l?).as_str()).expect("backup text file corrupted"),
             None => panic!("backup text file corrupted"),
@@ -275,8 +310,9 @@ impl TextReader {
         _table_info: TableInfo,
         cf: &str,
         seek_key: SeekKey,
+        compressed: bool,
     ) -> io::Result<TextReader> {
-        let mut text_reader = TextReader::new(path, _table_info, cf)?;
+        let mut text_reader = TextReader::new(path, _table_info, cf, compressed)?;
         match seek_key {
             SeekKey::Start => return Ok(text_reader),
             SeekKey::Key(sk) => {
