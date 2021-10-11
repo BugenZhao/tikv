@@ -270,6 +270,11 @@ pub struct Duration {
 
 impl Duration {
     #[inline]
+    pub fn new(nanos: i64, fsp: u8) -> Duration {
+        Duration { nanos, fsp }
+    }
+
+    #[inline]
     pub fn is_neg(self) -> bool {
         self.nanos < 0
     }

@@ -1,12 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::eval_context;
+use blake2::digest::{Update, VariableOutput};
+use blake2::VarBlake2b;
+use blake2::{Blake2b, Blake2s, Digest};
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::sync::Arc;
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
-use tidb_query_datatype::FieldTypeTp;
+use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tikv_util::buffer_vec::BufferVec;
 use tikv_util::escape;
 
@@ -35,6 +41,104 @@ pub fn write_bytes_to(tp: FieldTypeTp, buf: &mut Vec<u8>, d: &Datum) {
                 return;
             }
         },
+    };
+    buf.extend(s.as_bytes());
+}
+
+fn resize_i64(mut i: i64, field_type: &dyn FieldTypeAccessor) -> i64 {
+    let is_unsigned = field_type.flag().contains(FieldTypeFlag::UNSIGNED);
+    if is_unsigned {
+        i = i.abs();
+    }
+    let m = match (field_type.tp(), is_unsigned) {
+        (FieldTypeTp::Tiny, true) => 1 << 8,
+        (FieldTypeTp::Tiny, false) => 1 << 7,
+        (FieldTypeTp::Short, true) => 1 << 16,
+        (FieldTypeTp::Short, false) => 1 << 15,
+        (FieldTypeTp::Int24, true) => 1 << 24,
+        (FieldTypeTp::Int24, false) => 1 << 23,
+        (FieldTypeTp::Long, true) => 1 << 32,
+        (FieldTypeTp::Long, false) => 1 << 31,
+        (FieldTypeTp::LongLong, _) => return i,
+        (..) => unreachable!(),
+    };
+    i % m
+}
+
+fn hash_64_bytes(mut b: [u8; 8]) -> [u8; 8] {
+    let mut hasher = VarBlake2b::new(8).unwrap();
+    hasher.update(&b);
+    hasher.finalize_variable(|r| b = TryFrom::<&'_ [u8]>::try_from(r).unwrap());
+    b
+}
+
+pub fn desensitize(
+    ctx: &mut EvalContext,
+    field_type: &dyn FieldTypeAccessor,
+    buf: &mut Vec<u8>,
+    d: &Datum,
+) {
+    let s = match d {
+        Datum::I64(i) => {
+            let i = i64::from_le_bytes(hash_64_bytes(i.to_le_bytes()));
+            format!("{}", resize_i64(i, field_type))
+        }
+        Datum::U64(u) => {
+            format!("{}", u64::from_le_bytes(hash_64_bytes(u.to_le_bytes())))
+        }
+        // TODO: double to 1.xxx`e`xxx format
+        Datum::F64(f) => {
+            format!("{}", f64::from_le_bytes(hash_64_bytes(f.to_le_bytes())))
+        }
+        // TODO: time zone
+        Datum::Time(t) => {
+            // let t = u64::from_le_bytes(hash_64_bytes(t.to_packed_u64(ctx).unwrap().to_le_bytes()));
+            // let fsp = field_type.decimal() as i8;
+            // format!(
+            //     "\"{}\"",
+            //     Time::from_packed_u64(ctx, t, field_type.tp().try_into().unwrap(), fsp).unwrap()
+            // )
+            format!("\"{}\"", t)
+        }
+        Datum::Dur(ref d) => {
+            let n = i64::from_le_bytes(hash_64_bytes(d.to_nanos().to_le_bytes()));
+            format!("\"{}\"", Duration::new(n, d.fsp()))
+        }
+        Datum::Dec(ref d) => format!("{}", d),
+        Datum::Json(ref d) => format!("\"{}\"", escape(d.to_string().as_bytes())),
+        Datum::Enum(ref e) => format!("\"{}\"", e.to_string()),
+        Datum::Set(ref s) => format!("\"{}\"", s.to_string()),
+        Datum::Null => "\\N".to_owned(),
+        Datum::Max => "MAX".to_owned(),
+        Datum::Min => "MIN".to_owned(),
+        Datum::Bytes(ref bs) => {
+            let mut hasher = Blake2b::new();
+            Digest::update(&mut hasher, bs);
+            let h = hasher.finalize();
+            match field_type.tp() {
+                FieldTypeTp::String | FieldTypeTp::VarString | FieldTypeTp::VarChar => {
+                    let mut s = hex::encode(h);
+                    let (ha_len, or_len) = (s.len(), bs.len());
+                    if ha_len > or_len {
+                        s.truncate(or_len);
+                    } else if ha_len < or_len {
+                        s.push_str(&"*".repeat(or_len - ha_len));
+                    }
+                    format!("\"{}\"", s)
+                }
+                _ => {
+                    buf.extend(b"\"");
+                    if h.len() >= bs.len() {
+                        buf.extend(&h[..bs.len()]);
+                    } else {
+                        buf.extend(&h[..]);
+                        buf.extend(&vec![0u8; bs.len() - h.len()]);
+                    }
+                    buf.extend(b"\"");
+                    return;
+                }
+            }
+        }
     };
     buf.extend(s.as_bytes());
 }

@@ -68,7 +68,7 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        hr_datum::write_bytes_to(schema.columns[id].tp(), &mut res, &d);
+        hr_datum::desensitize(ctx, &schema.columns[id], &mut res, &d);
         res.push(b',');
     }
     if !res.is_empty() {
