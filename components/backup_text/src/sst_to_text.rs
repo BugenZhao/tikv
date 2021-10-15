@@ -44,7 +44,7 @@ pub fn kv_to_csv(
                 if schema.primary_handle.is_none() {
                     return Err(format!("unexpect empty primary_handle").into());
                 }
-                datums_map.insert(schema.primary_handle.unwrap(), Datum::I64(pk));
+                datums_map.insert(schema.primary_handle.unwrap(), pk.into());
             }
             HrHandle::Common(ch) => {
                 if schema.common_handle.is_empty() {

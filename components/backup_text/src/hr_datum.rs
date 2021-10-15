@@ -213,6 +213,13 @@ impl HrDatum {
         let d = workload_sim_mask(d, field_type).unwrap_or_else(|d| d);
         Self::without_mask(d)
     }
+
+    pub fn get_int_handle(self) -> i64 {
+        match self {
+            HrDatum::I64(i) => i,
+            _ => 0,
+        }
+    }
 }
 
 impl Into<Datum> for HrDatum {

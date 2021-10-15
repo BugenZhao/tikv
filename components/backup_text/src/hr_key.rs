@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use serde::{Deserialize, Serialize};
-use tidb_query_datatype::codec::table::*;
+use tidb_query_datatype::codec::{table::*, Datum};
 use txn_types::{Key, TimeStamp};
 
 use crate::{eval_context, hr_datum::HrDatum};
@@ -10,7 +10,7 @@ use crate::{eval_context, hr_datum::HrDatum};
 #[serde(untagged)]
 pub enum HrHandle {
     Common(Vec<HrDatum>),
-    Int(i64),
+    Int(HrDatum),
 }
 
 impl HrHandle {
@@ -21,6 +21,10 @@ impl HrHandle {
             .map(|d| HrDatum::with_workload_sim_mask(d, None))
             .collect();
         Self::Common(datums)
+    }
+
+    pub fn from_i64(int: i64) -> Self {
+        Self::Int(HrDatum::with_workload_sim_mask(Datum::I64(int), None))
     }
 }
 
@@ -40,7 +44,7 @@ impl HrDataKey {
         let table_id = decode_table_id(&raw_key).unwrap();
         let handle = if raw_key.len() == PREFIX_LEN + 8 {
             // Int handle
-            decode_int_handle(&raw_key).map(HrHandle::Int).unwrap()
+            decode_int_handle(&raw_key).map(HrHandle::from_i64).unwrap()
         } else {
             // Common handle
             decode_common_handle(&raw_key)
@@ -67,7 +71,7 @@ impl HrDataKey {
                     encode_common_handle_from_datums(&mut eval_context(), &datums).unwrap();
                 encode_row_key_with_common_handle(table_id, &handle)
             }
-            HrHandle::Int(h) => encode_row_key(table_id, h),
+            HrHandle::Int(h) => encode_row_key(table_id, h.get_int_handle()),
         };
         let mut key = Key::from_raw(&raw_key);
         if let Some(ts) = ts {
