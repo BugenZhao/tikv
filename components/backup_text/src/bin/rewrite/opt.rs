@@ -116,7 +116,6 @@ fn parse_backend(backend: &str) -> Result<StorageBackend> {
 
 // TODO: support parse from file
 // S3BackendOptions contains options for s3 storage.
-#[derive(Default)]
 struct S3BackendOptions {
     endpoint: String,
     region: String,
@@ -129,6 +128,15 @@ struct S3BackendOptions {
     provider: String,
     force_path_style: bool,
     use_accelerate_endpoint: bool,
+}
+
+impl Default for S3BackendOptions {
+    fn default() -> S3BackendOptions {
+        S3BackendOptions {
+            force_path_style: true,
+            ..Default::default()
+        }
+    }
 }
 
 // Port from golang strconv.ParseBool
