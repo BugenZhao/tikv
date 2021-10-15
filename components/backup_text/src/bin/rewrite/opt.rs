@@ -4,7 +4,6 @@ use external_storage_export::*;
 use kvproto::brpb::S3;
 use kvproto::brpb::{FileFormat, StorageBackend};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use structopt::StructOpt;
 use url::Url;
 
@@ -116,6 +115,7 @@ fn parse_backend(backend: &str) -> Result<StorageBackend> {
 
 // TODO: support parse from file
 // S3BackendOptions contains options for s3 storage.
+#[derive(Default)]
 struct S3BackendOptions {
     endpoint: String,
     region: String,
@@ -130,8 +130,8 @@ struct S3BackendOptions {
     use_accelerate_endpoint: bool,
 }
 
-impl Default for S3BackendOptions {
-    fn default() -> S3BackendOptions {
+impl S3BackendOptions {
+    fn new() -> S3BackendOptions {
         S3BackendOptions {
             force_path_style: true,
             ..Default::default()
@@ -150,7 +150,7 @@ fn parse_bool(s: &str) -> Result<bool> {
 
 impl S3BackendOptions {
     fn parse_s3_option_from_query(u: &Url) -> Result<S3BackendOptions> {
-        let mut opt = S3BackendOptions::default();
+        let mut opt = S3BackendOptions::new();
         for (k, v) in u.query_pairs() {
             match k.as_ref().to_lowercase().replace("_", "-").as_ref() {
                 "endpoint" => opt.endpoint = v.as_ref().to_owned(),

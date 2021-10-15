@@ -153,26 +153,30 @@ async fn worker(opt: Opt) -> Result<()> {
     info!("rewrite data files all done");
 
     // Post work
-    match mode {
-        RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToSst { .. } => {
-            // update meta file for correct restoration
-            let new_meta = mutate_data_files(&storage, &new_storage, meta, |file| {
-                let mutated_file = mutated_file_map
-                    .get(file.get_name())
-                    .cloned()
-                    .flatten()
-                    .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
-                    .unwrap();
-                *file = mutated_file;
-            })
-            .await?;
-            write_message(&new_storage, META_FILE, new_meta)?;
-            info!("update meta file done");
-        }
-        RewriteMode::ToCsv { copy_schema_sql } => {
-            // copy schema sql if present and needed
-            if copy_schema_sql {
-                tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        match mode {
+            RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToSst { .. } => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                futures::executor::block_on(async move {
+                    // update meta file for correct restoration
+                    let new_meta = mutate_data_files(&storage, &new_storage, meta, |file| {
+                        let mutated_file = mutated_file_map
+                            .get(file.get_name())
+                            .cloned()
+                            .flatten()
+                            .ok_or_else(|| anyhow!("file not mutated: {}", file.get_name()))
+                            .unwrap();
+                        *file = mutated_file;
+                    }).await;
+                    tx.send((new_meta, new_storage)).unwrap();
+                });
+                let (new_meta, new_storage) = rx.recv().unwrap();
+                write_message(&new_storage, META_FILE, new_meta?)?;
+                info!("update meta file done");
+            }
+            RewriteMode::ToCsv { copy_schema_sql } => {
+                // copy schema sql if present and needed
+                if copy_schema_sql {
                     let mut count = 0;
                     for schema_file in meta.get_schema_files() {
                         match storage_copy(
@@ -192,10 +196,11 @@ async fn worker(opt: Opt) -> Result<()> {
                         }
                     }
                     info!("copy schema sqls done"; "count" => count);
-                }).await?;
+                }
             }
         }
-    }
+        Ok(())
+    }).await??;
 
     Ok(())
 }
