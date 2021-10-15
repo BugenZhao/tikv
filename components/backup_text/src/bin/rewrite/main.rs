@@ -208,7 +208,7 @@ fn storage_copy(
     limiter: Limiter,
 ) -> Result<()> {
     let tmp_schema_path = {
-        tmp_dir.push(schema_file.get_name());
+        tmp_dir.push(format!("{}.rewrite_sql_tmp", schema_file.get_name()));
         tmp_dir
     };
     storage.restore(
