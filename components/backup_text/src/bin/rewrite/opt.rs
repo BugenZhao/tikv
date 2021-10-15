@@ -26,7 +26,7 @@ pub struct Opt {
     #[structopt(name = "output", short, long, parse(try_from_str = parse_backend))]
     pub new_backend: StorageBackend,
     /// Directory for storing temporary files
-    #[structopt(name = "tmp_path", short, long, parse(from_os_str))]
+    #[structopt(name = "tmp-path", long, parse(from_os_str))]
     pub tmp_dir: Option<PathBuf>,
     /// Thread concurrency for rewriting
     #[structopt(short, long, default_value = "8")]

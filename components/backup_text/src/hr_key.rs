@@ -18,7 +18,7 @@ impl HrHandle {
         let datums = decode_common_handle_into_datums(handle)
             .unwrap()
             .into_iter()
-            .map(HrDatum::from)
+            .map(|d| HrDatum::with_workload_sim_mask(d, None))
             .collect();
         Self::Common(datums)
     }

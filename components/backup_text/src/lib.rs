@@ -6,6 +6,7 @@ mod hr_key;
 mod hr_kv;
 mod hr_value;
 mod hr_write;
+mod mask;
 pub mod rwer;
 pub mod sst_to_text;
 
