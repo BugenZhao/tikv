@@ -1,69 +1,70 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
+use crate::{opt::RewriteMode, utils::update_file};
 use anyhow::{anyhow, Result};
 use backup_text::rwer::{TextReader, TextWriter};
 use engine_rocks::{RocksSstReader, RocksSstWriterBuilder};
 use engine_traits::{
     name_to_cf, ExternalSstFileInfo, Iterator, SeekKey, SstReader, SstWriter, SstWriterBuilder,
 };
-use kvproto::brpb::File;
+use futures_util::io::AllowStdIo;
+use kvproto::brpb::{File, StorageBackend};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+use tikv_util::time::Limiter;
 use tipb::TableInfo;
 
-use crate::{opt::RewriteMode, utils::update_file};
-
 pub fn rewrite(
-    dir: impl AsRef<Path>,
-    new_dir: impl AsRef<Path>,
-    file: File,
+    in_backend: StorageBackend,
+    out_backend: StorageBackend,
+    speed_limiter: Limiter,
+    tmp_dir: PathBuf,
+    mut file: File,
     rename_to: Option<String>,
     table_info: TableInfo,
     mode: RewriteMode,
 ) -> Result<Option<File>> {
-    let get_path = |dir: &Path, name: &str| {
-        let mut path = PathBuf::from(dir);
-        path.push(name);
-        path
-    };
-
-    let path = get_path(dir.as_ref(), file.get_name());
-    let path_str = path.to_str().unwrap();
-
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name: {}", file.get_cf()))?;
+    let new_name = rename_to.unwrap_or_else(|| {
+        let mut p = PathBuf::from(file.get_name());
+        p.set_extension(mode.extension());
+        p.to_str().unwrap().to_owned()
+    });
 
-    let new_path = rename_to
-        .map(|n| get_path(new_dir.as_ref(), &n))
-        .unwrap_or_else(|| {
-            get_path(new_dir.as_ref(), file.get_name()).with_extension(mode.extension())
-        });
-    let new_path_str = new_path.to_str().unwrap();
+    let mut in_tmp_path = tmp_dir;
+    in_tmp_path.push(file.get_name());
+    let in_tmp_path_str = in_tmp_path.to_str().unwrap().to_owned();
+    let out_tmp_path_str = format!("{}.rewrite_tmp", in_tmp_path_str);
+    let ext_storage = external_storage_export::create_storage(&in_backend)?;
+    let out_storage = external_storage_export::create_storage(&out_backend)?;
 
-    let (new_path, size) = match mode {
+    // Download the file to local path frist
+    ext_storage.restore(
+        file.get_name(),
+        in_tmp_path.clone(),
+        file.get_size(),
+        &speed_limiter,
+    )?;
+    let file_size = match mode {
         RewriteMode::ToText | RewriteMode::ToZtext { .. } | RewriteMode::ToCsv { .. } => {
-            let reader = RocksSstReader::open(path_str)?;
-            reader.verify_checksum()?;
-
             let compression_level = match mode {
                 RewriteMode::ToText => None,
                 RewriteMode::ToZtext { level } => Some(level.clamp(0, 9)),
                 RewriteMode::ToCsv { .. } => None,
                 _ => unreachable!(),
             };
-
             let mut writer = TextWriter::new(
                 table_info,
                 cf,
                 mode.file_format(),
-                &format!("{}.rewrite_tmp", new_path_str),
+                &out_tmp_path_str,
                 compression_level,
             )?;
-            let temp_path_str = writer.name().to_owned();
 
+            let reader = RocksSstReader::open(&in_tmp_path_str)?;
+            reader.verify_checksum()?;
             let mut iter = reader.iter();
             iter.seek(SeekKey::Start)?; // ignore start_key in file
-
             while iter.valid()? {
                 let key = iter.key();
                 let value = iter.value();
@@ -71,40 +72,51 @@ pub fn rewrite(
                 iter.next()?;
             }
 
-            let size = writer.finish()?;
-            if matches!(mode, RewriteMode::ToCsv { .. }) && size == 0 {
-                // remove empty csv files
-                writer.cleanup()?;
-                (None, size)
-            } else {
-                fs::rename(&temp_path_str, &new_path)?;
-                (Some(new_path), size)
+            let (file_size, reader) = writer.finish_read()?;
+            if file_size != 0 {
+                out_storage.write(
+                    &new_name,
+                    Box::new(speed_limiter.limit(AllowStdIo::new(reader))),
+                    file_size,
+                )?;
             }
+            writer.cleanup()?;
+            file_size
         }
 
         RewriteMode::ToSst => {
-            let compressed_text = path.extension().unwrap_or_default()
+            let compressed_text = Path::new(file.get_name()).extension().unwrap_or_default()
                 == RewriteMode::ToZtext { level: 1 }.extension();
-            let mut reader = TextReader::new(path_str, table_info, cf, compressed_text)?;
+            let mut reader = TextReader::new(&in_tmp_path_str, table_info, cf, compressed_text)?;
             let mut writer = RocksSstWriterBuilder::new()
+                .set_in_memory(true)
                 .set_cf(cf)
-                .build(new_path_str)?;
+                .build(&out_tmp_path_str)?;
 
             while let Some((key, value)) = reader.pop_kv()? {
                 writer.put(&key, &value)?;
             }
 
-            let size = writer.finish()?.file_size();
-            (Some(new_path), size)
+            let (sst_info, reader) = writer.finish_read()?;
+            let file_size = sst_info.file_size();
+            if file_size != 0 {
+                out_storage.write(
+                    &new_name,
+                    Box::new(speed_limiter.limit(AllowStdIo::new(reader))),
+                    file_size,
+                )?;
+            }
+            file_size
         }
     };
 
-    let mutated_file = new_path.map(|p| {
-        let name = p.file_name().unwrap().to_string_lossy().to_string();
-        let mut file = file;
-        update_file(&mut file, name, size);
-        file
-    });
+    // Cleanup tmp file
+    fs::remove_file(&in_tmp_path)?;
 
-    Ok(mutated_file)
+    if file_size != 0 {
+        update_file(&mut file, new_name.to_owned(), file_size);
+        Ok(Some(file))
+    } else {
+        Ok(None)
+    }
 }

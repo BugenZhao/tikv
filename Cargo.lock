@@ -276,6 +276,7 @@ dependencies = [
  "external_storage_export",
  "flate2",
  "futures 0.3.15",
+ "futures-util",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -292,6 +293,7 @@ dependencies = [
  "tipb",
  "tokio",
  "txn_types",
+ "url",
 ]
 
 [[package]]
@@ -2175,7 +2177,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/NingLin-P/kvproto?branch=br-text#3bba0ef197d86631ce229f91c72d8fee704e4da3"
+source = "git+https://github.com/NingLin-P/kvproto?branch=br-text#168c3ac9ebcc39c06be0339eebfbd26bbcea091d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

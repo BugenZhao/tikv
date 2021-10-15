@@ -1,9 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::PathBuf;
-
-use kvproto::brpb::FileFormat;
+use external_storage_export::*;
+use kvproto::brpb::S3;
+use kvproto::brpb::{FileFormat, StorageBackend};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use structopt::StructOpt;
+use url::Url;
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(StructOpt)]
 #[structopt(
@@ -15,11 +20,14 @@ pub struct Opt {
     #[structopt(subcommand)]
     pub mode: RewriteMode,
     /// Path to the directory of original files
-    #[structopt(name = "input", short, long, parse(from_os_str))]
-    pub path: PathBuf,
+    #[structopt(name = "input", short, long, parse(try_from_str = parse_backend))]
+    pub backend: StorageBackend,
     /// Path to the directory of rewritten files, `<input>/rewrite.<format>` if not present
-    #[structopt(name = "output", short, long, parse(from_os_str))]
-    pub new_path: Option<PathBuf>,
+    #[structopt(name = "output", short, long, parse(try_from_str = parse_backend))]
+    pub new_backend: StorageBackend,
+    /// Directory for storing temporary files
+    #[structopt(name = "tmp_path", short, long, parse(from_os_str))]
+    pub tmp_dir: Option<PathBuf>,
     /// Thread concurrency for rewriting
     #[structopt(short, long, default_value = "8")]
     pub threads: usize,
@@ -76,5 +84,163 @@ impl RewriteMode {
             RewriteMode::ToCsv { .. } => "sst => csv",
             RewriteMode::ToSst => "text => sst",
         }
+    }
+}
+
+fn parse_backend(backend: &str) -> Result<StorageBackend> {
+    // https://github.com/pingcap/br/issues/603
+    // In aws the secret key may contain '/+=' and '+' has a special meaning in URL.
+    // Replace "+" by "%2B" here to avoid this problem.
+    let u = Url::parse(&backend.replace("+", "%2B"))?;
+    match u.scheme() {
+        "local" | "file" => Ok(make_local_backend(Path::new(u.path()))),
+        "noop" => Ok(make_noop_backend()),
+        "s3" => {
+            let host = match u.host_str() {
+                None => {
+                    return Err(format!("please specify the bucket for s3 in {}", backend).into());
+                }
+                Some(h) => h.to_owned(),
+            };
+            let opt = S3BackendOptions::parse_s3_option_from_query(&u)?;
+            let mut s3 = S3::default();
+            s3.set_bucket(host);
+            s3.set_prefix(u.path().trim_matches('/').to_owned());
+            opt.apply_s3_option(&mut s3)?;
+            Ok(make_s3_backend(s3))
+        }
+        // TODO: support "gs", "gcs"
+        s => Err(format!("storage {} not support yet", s).into()),
+    }
+}
+
+// TODO: support parse from file
+// S3BackendOptions contains options for s3 storage.
+#[derive(Default)]
+struct S3BackendOptions {
+    endpoint: String,
+    region: String,
+    storage_class: String,
+    sse: String,
+    sse_kms_key_id: String,
+    acl: String,
+    access_key: String,
+    secret_access_key: String,
+    provider: String,
+    force_path_style: bool,
+    use_accelerate_endpoint: bool,
+}
+
+// Port from golang strconv.ParseBool
+fn parse_bool(s: &str) -> Result<bool> {
+    match s {
+        "1" | "t" | "T" | "true" | "TRUE" | "True" => Ok(true),
+        "0" | "f" | "F" | "false" | "FALSE" | "False" => Ok(false),
+        _ => Err(format!("failed to parse {} to bool", s).into()),
+    }
+}
+
+impl S3BackendOptions {
+    fn parse_s3_option_from_query(u: &Url) -> Result<S3BackendOptions> {
+        let mut opt = S3BackendOptions::default();
+        for (k, v) in u.query_pairs() {
+            match k.as_ref().to_lowercase().replace("_", "-").as_ref() {
+                "endpoint" => opt.endpoint = v.as_ref().to_owned(),
+                "region" => opt.region = v.as_ref().to_owned(),
+                "storage-class" => opt.storage_class = v.as_ref().to_owned(),
+                "sse" => opt.sse = v.as_ref().to_owned(),
+                "sse-kms-key-id" => opt.sse_kms_key_id = v.as_ref().to_owned(),
+                "acl" => opt.acl = v.as_ref().to_owned(),
+                "access-key" => opt.access_key = v.as_ref().to_owned(),
+                "secret-access-key" => opt.secret_access_key = v.as_ref().to_owned(),
+                "provider" => opt.provider = v.as_ref().to_owned(),
+                "force-path-style" => opt.force_path_style = parse_bool(v.as_ref())?,
+                "use-accelerate-endpoint" => opt.use_accelerate_endpoint = parse_bool(v.as_ref())?,
+                _ => {}
+            }
+        }
+        Ok(opt)
+    }
+
+    // Apply apply s3 options on backuppb.S3.
+    fn apply_s3_option(mut self, s3: &mut S3) -> Result<()> {
+        if self.region.is_empty() {
+            self.region = "us-east-1".to_owned();
+        }
+        if !self.endpoint.is_empty() {
+            let u = Url::parse(&self.endpoint)?;
+            if u.scheme().is_empty() {
+                return Err("scheme not found in endpoint".to_owned().into());
+            }
+            if u.host_str().is_none() {
+                return Err("host not found in endpoint".to_owned().into());
+            }
+        }
+        // In some cases, we need to set ForcePathStyle to false.
+        // Refer to: https://rclone.org/s3/#s3-force-path-style
+        if self.provider == "alibaba" || self.provider == "netease" || self.use_accelerate_endpoint
+        {
+            self.force_path_style = false;
+        }
+        if self.access_key.is_empty() && !self.secret_access_key.is_empty() {
+            return Err("access_key not found".to_owned().into());
+        }
+        if !self.access_key.is_empty() && self.secret_access_key.is_empty() {
+            return Err("secret_access_key not found".to_owned().into());
+        }
+        s3.set_endpoint(self.endpoint);
+        s3.set_region(self.region);
+        // StorageClass, SSE and ACL are acceptable to be empty
+        s3.set_storage_class(self.storage_class);
+        s3.set_sse(self.sse);
+        s3.set_sse_kms_key_id(self.sse_kms_key_id);
+        s3.set_acl(self.acl);
+        s3.set_access_key(self.access_key);
+        s3.set_secret_access_key(self.secret_access_key);
+        s3.set_force_path_style(self.force_path_style);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_storage() {
+        let s = parse_backend("local:///data/backup/full").unwrap();
+        assert!(s.has_local());
+        assert_eq!(s.get_local().get_path(), "/data/backup/full");
+
+        let s = parse_backend("file:///data/backup/full").unwrap();
+        assert!(s.has_local());
+        assert_eq!(s.get_local().get_path(), "/data/backup/full");
+
+        let s = parse_backend("noop://").unwrap();
+        assert!(s.has_noop());
+
+        assert!(parse_backend("s3:///test_bucket/more/prefix").is_err());
+
+        let mut s = parse_backend("s3://bucket1/more/prefix?endpoint=https://127.0.0.1:9000&force_path_style=0&SSE=aws:kms&sse-kms-key-id=TestKey&xyz=abc").unwrap();
+        assert!(s.has_s3());
+        let s3 = s.take_s3();
+        assert_eq!(s3.get_bucket(), "bucket1");
+        assert_eq!(s3.get_prefix(), "more/prefix");
+        assert_eq!(s3.get_endpoint(), "https://127.0.0.1:9000");
+        assert_eq!(s3.get_force_path_style(), false);
+        assert_eq!(s3.get_sse(), "aws:kms");
+        assert_eq!(s3.get_sse_kms_key_id(), "TestKey");
+
+        // special character in access keys
+        let mut s = parse_backend("s3://bucket2/prefix/path?access-key=NXN7IPIOSAAKDEEOLMAF&secret-access-key=nREY/7Dt+PaIbYKrKlEEMMF/ExCiJEX=XMLPUANw").unwrap();
+        assert!(s.has_s3());
+        let s3 = s.take_s3();
+        assert_eq!(s3.get_bucket(), "bucket2");
+        assert_eq!(s3.get_prefix(), "prefix/path");
+        assert_eq!(s3.get_access_key(), "NXN7IPIOSAAKDEEOLMAF");
+        assert_eq!(
+            s3.get_secret_access_key(),
+            "nREY/7Dt+PaIbYKrKlEEMMF/ExCiJEX=XMLPUANw"
+        );
     }
 }

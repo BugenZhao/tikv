@@ -6,18 +6,20 @@ mod opt;
 mod rewrite;
 mod utils;
 
-use std::{fs, path::PathBuf};
-
 use anyhow::{anyhow, Context, Result};
 use collections::HashMap;
-
-use external_storage_export::{create_storage, make_local_backend};
+use external_storage_export::create_storage;
 use futures::future::try_join_all;
+use futures_util::io::AllowStdIo;
 use kvproto::brpb::{BackupMeta, File};
 use opt::{Opt, RewriteMode};
 use slog::Drain;
 use slog_global::{error, info};
+use std::fs::{self, OpenOptions};
+use std::io::BufReader;
+use std::path::PathBuf;
 use tidb_query_datatype::codec::table::decode_table_id;
+use tikv_util::time::Limiter;
 use tokio::runtime;
 
 use crate::{
@@ -61,30 +63,18 @@ fn check_mode<'a>(mode: &RewriteMode, files: &[File]) -> Result<()> {
 
 async fn worker(opt: Opt) -> Result<()> {
     let Opt {
-        path,
-        new_path,
+        backend,
+        new_backend,
         mode,
         ..
     } = opt;
 
     info!("running rewrite"; "mode" => mode.description());
 
-    let storage = {
-        let backend = make_local_backend(&path); // todo: support other backends
-        create_storage(&backend)?
-    };
-
-    let new_path = new_path.unwrap_or_else(|| {
-        let mut new_path = path.clone();
-        new_path.push("rewrite");
-        new_path.set_extension(mode.extension());
-        new_path
-    });
-    let new_storage = {
-        fs::create_dir_all(&new_path)?;
-        let backend = make_local_backend(&new_path);
-        create_storage(&backend)?
-    };
+    let limmiter = Limiter::new(f64::INFINITY);
+    let storage = create_storage(&backend)?;
+    let new_storage = create_storage(&new_backend)?;
+    let tmp_dir = opt.tmp_dir.unwrap_or(PathBuf::from("./"));
 
     let meta: BackupMeta = read_message(&storage, META_FILE)
         .await
@@ -121,12 +111,23 @@ async fn worker(opt: Opt) -> Result<()> {
         let name_width = files.len().to_string().len();
         for (i, file) in files.into_iter().enumerate() {
             let info = info.clone();
-            let (dir, new_dir) = (path.clone(), new_path.clone());
+            let (in_backend, out_backend) = (backend.clone(), new_backend.clone());
+            let limmiter = limmiter.clone();
             let name = file.get_name().to_owned();
+            let tmp_dir = tmp_dir.clone();
             let rename_to = matches!(mode, RewriteMode::ToCsv { .. })
                 .then(|| format!("{}.{:0width$}.csv", info.get_name(), i, width = name_width));
             let handle = tokio::task::spawn_blocking(move || {
-                match rewrite(dir, new_dir, file, rename_to, info, mode) {
+                match rewrite(
+                    in_backend,
+                    out_backend,
+                    limmiter,
+                    tmp_dir,
+                    file,
+                    rename_to,
+                    info,
+                    mode,
+                ) {
                     Ok(mutated_file) => {
                         let new_name = mutated_file.as_ref().map(|f| f.get_name());
                         let new_size = mutated_file.as_ref().map(|f| f.get_size());
@@ -171,15 +172,27 @@ async fn worker(opt: Opt) -> Result<()> {
             // copy schema sql if present and needed
             if copy_schema_sql {
                 let mut count = 0;
-                for entry in fs::read_dir(&path)? {
-                    let file_path = entry?.path();
-                    let name = file_path.file_name().unwrap_or_default().to_string_lossy();
-                    if file_path.is_file() && name.ends_with("-schema.sql") {
-                        let mut new_file_path = new_path.clone();
-                        new_file_path.push(name.as_ref());
-                        fs::copy(file_path, new_file_path)?;
-                        count += 1;
-                    }
+                for schema_file in meta.get_schema_files() {
+                    let tmp_schema_path = {
+                        let mut p = tmp_dir.clone();
+                        p.push(schema_file.get_name());
+                        p
+                    };
+                    storage.restore(
+                        schema_file.get_name(),
+                        tmp_schema_path.clone(),
+                        schema_file.get_size(),
+                        &limmiter,
+                    )?;
+                    let reader =
+                        BufReader::new(OpenOptions::new().read(true).open(&tmp_schema_path)?);
+                    new_storage.write(
+                        schema_file.get_name(),
+                        Box::new(limmiter.clone().limit(AllowStdIo::new(reader))),
+                        schema_file.get_size(),
+                    )?;
+                    fs::remove_file(&tmp_schema_path)?;
+                    count += 1;
                 }
                 info!("copy schema sqls done"; "count" => count);
             }
