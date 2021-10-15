@@ -36,27 +36,29 @@ fn resize_u64(u: u64, field_type: Option<&dyn FieldTypeAccessor>) -> u64 {
     }
 }
 
-fn hash_bytes(bytes: &mut [u8]) -> &[u8] {
+fn hash_bytes(bytes: &[u8], size: usize) -> Vec<u8> {
     let mut hasher = new_hasher();
     hasher.update(bytes);
     let mut reader = hasher.finalize_xof();
-    reader.fill(bytes);
-    bytes
+
+    let mut buf = vec![0; size];
+    reader.fill(&mut buf);
+    buf
 }
 
 #[inline]
 fn hash_i64(i: i64) -> i64 {
-    i64::from_le_bytes(hash_bytes(&mut i.to_le_bytes()).try_into().unwrap())
+    i64::from_le_bytes(hash_bytes(&mut i.to_le_bytes(), 8).try_into().unwrap())
 }
 
 #[inline]
 fn hash_f64(f: f64) -> f64 {
-    f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes()).try_into().unwrap())
+    f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap())
 }
 
 fn hash_string(bytes: &mut [u8]) -> Vec<u8> {
     let size = bytes.len();
-    let sum = hash_bytes(bytes);
+    let sum = hash_bytes(bytes, size / 2);
     let mut hex = hex::encode(sum);
     hex.push_str(&"*".repeat(size - hex.len()));
     hex.into_bytes()
@@ -82,4 +84,22 @@ pub fn workload_sim_mask(
         | Datum::Set(_) => return Err(datum),
     }
     Ok(datum)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_workload_sim_mask() {
+        let datums = [
+            Datum::I64(42),
+            Datum::U64(42),
+            Datum::F64(42.42),
+            Datum::Bytes("Hello".as_bytes().to_vec()),
+            Datum::Bytes(b"\x01\x02".to_vec()),
+        ];
+
+        let _ = datums.map(|d| workload_sim_mask(d, None).unwrap()).len();
+    }
 }
