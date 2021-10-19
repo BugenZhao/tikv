@@ -29,7 +29,7 @@ const U24_MIN: u64 = 0;
 const U24_MAX: u64 = (1 << 24) - 1;
 
 #[inline]
-fn hash_i64(from: i64) -> i64 {
+fn mask_i64(from: i64) -> i64 {
     let to = i64::from_le_bytes(hash_bytes(&mut from.to_le_bytes(), 8).try_into().unwrap());
 
     if let Ok(_) = i8::try_from(from) {
@@ -46,7 +46,7 @@ fn hash_i64(from: i64) -> i64 {
 }
 
 #[inline]
-fn hash_u64(from: u64) -> u64 {
+fn mask_u64(from: u64) -> u64 {
     let to = u64::from_le_bytes(hash_bytes(&mut from.to_le_bytes(), 8).try_into().unwrap());
 
     if let Ok(_) = u8::try_from(from) {
@@ -63,11 +63,11 @@ fn hash_u64(from: u64) -> u64 {
 }
 
 #[inline]
-fn hash_f64(f: f64) -> f64 {
+fn mask_f64(f: f64) -> f64 {
     f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap())
 }
 
-fn hash_string(bytes: &mut [u8]) -> Vec<u8> {
+fn mask_string(bytes: &mut [u8]) -> Vec<u8> {
     let size = bytes.len();
     let sum = hash_bytes(bytes, size / 2);
     let mut hex = hex::encode(sum);
@@ -80,10 +80,10 @@ pub fn workload_sim_mask(mut datum: Datum) -> MaskResult {
         Datum::Null => {}
         Datum::Min => {}
         Datum::Max => {}
-        Datum::I64(i) => *i = hash_i64(*i),
-        Datum::U64(u) => *u = hash_u64(*u),
-        Datum::F64(f) => *f = hash_f64(*f),
-        Datum::Bytes(bytes) => *bytes = hash_string(bytes).to_vec(),
+        Datum::I64(i) => *i = mask_i64(*i),
+        Datum::U64(u) => *u = mask_u64(*u),
+        Datum::F64(f) => *f = mask_f64(*f),
+        Datum::Bytes(bytes) => *bytes = mask_string(bytes).to_vec(),
 
         Datum::Dur(_)
         | Datum::Dec(_)
