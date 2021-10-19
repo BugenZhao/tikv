@@ -1,39 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 
-use tidb_query_datatype::{codec::Datum, FieldTypeAccessor, FieldTypeTp};
+use tidb_query_datatype::codec::Datum;
 
 pub type MaskResult = Result<Datum, Datum>;
 
 const DEFAULT_CONTEXT: &'static str = "tidb";
 
+#[inline]
 fn new_hasher() -> blake3::Hasher {
     blake3::Hasher::new_derive_key(DEFAULT_CONTEXT)
-}
-
-fn resize_i64(i: i64, field_type: Option<&dyn FieldTypeAccessor>) -> i64 {
-    let tp = field_type.map_or(FieldTypeTp::Unspecified, |ft| ft.tp());
-    match tp {
-        FieldTypeTp::Tiny => i % (i8::MAX as i64 + 1),
-        FieldTypeTp::Short => i % (i16::MAX as i64 + 1),
-        FieldTypeTp::Int24 => i % (1 << 23),
-        FieldTypeTp::Long => i % (i32::MAX as i64 + 1),
-        FieldTypeTp::LongLong => i,
-        _ => i,
-    }
-}
-
-fn resize_u64(u: u64, field_type: Option<&dyn FieldTypeAccessor>) -> u64 {
-    let tp = field_type.map_or(FieldTypeTp::Unspecified, |ft| ft.tp());
-    match tp {
-        FieldTypeTp::Tiny => u % (u8::MAX as u64 + 1),
-        FieldTypeTp::Short => u % (u16::MAX as u64 + 1),
-        FieldTypeTp::Int24 => u % (1 << 24),
-        FieldTypeTp::Long => u % (u32::MAX as u64 + 1),
-        FieldTypeTp::LongLong => u,
-        _ => u,
-    }
 }
 
 fn hash_bytes(bytes: &[u8], size: usize) -> Vec<u8> {
@@ -46,9 +23,43 @@ fn hash_bytes(bytes: &[u8], size: usize) -> Vec<u8> {
     buf
 }
 
+const I24_MIN: i64 = -(1 << 24 - 1);
+const I24_MAX: i64 = (1 << 24 - 1) - 1;
+const U24_MIN: u64 = 0;
+const U24_MAX: u64 = (1 << 24) - 1;
+
 #[inline]
-fn hash_i64(i: i64) -> i64 {
-    i64::from_le_bytes(hash_bytes(&mut i.to_le_bytes(), 8).try_into().unwrap())
+fn hash_i64(from: i64) -> i64 {
+    let to = i64::from_le_bytes(hash_bytes(&mut from.to_le_bytes(), 8).try_into().unwrap());
+
+    if let Ok(_) = i8::try_from(from) {
+        to % (i8::MAX as i64 + 1)
+    } else if let Ok(_) = i16::try_from(from) {
+        to % (i16::MAX as i64 + 1)
+    } else if let I24_MIN..=I24_MAX = from {
+        to % (I24_MAX as i64 + 1)
+    } else if let Ok(_) = i32::try_from(from) {
+        to % (i32::MAX as i64 + 1)
+    } else {
+        to
+    }
+}
+
+#[inline]
+fn hash_u64(from: u64) -> u64 {
+    let to = u64::from_le_bytes(hash_bytes(&mut from.to_le_bytes(), 8).try_into().unwrap());
+
+    if let Ok(_) = u8::try_from(from) {
+        to % (u8::MAX as u64 + 1)
+    } else if let Ok(_) = u16::try_from(from) {
+        to % (u16::MAX as u64 + 1)
+    } else if let U24_MIN..=U24_MAX = from {
+        to % (U24_MAX as u64 + 1)
+    } else if let Ok(_) = u32::try_from(from) {
+        to % (u32::MAX as u64 + 1)
+    } else {
+        to
+    }
 }
 
 #[inline]
@@ -64,24 +75,22 @@ fn hash_string(bytes: &mut [u8]) -> Vec<u8> {
     hex.into_bytes()
 }
 
-pub fn workload_sim_mask(
-    mut datum: Datum,
-    field_type: Option<&dyn FieldTypeAccessor>,
-) -> MaskResult {
+pub fn workload_sim_mask(mut datum: Datum) -> MaskResult {
     match &mut datum {
         Datum::Null => {}
         Datum::Min => {}
         Datum::Max => {}
-        Datum::I64(i) => *i = resize_i64(hash_i64(*i), field_type),
-        Datum::U64(u) => *u = resize_u64(hash_i64(*u as i64) as u64, field_type),
+        Datum::I64(i) => *i = hash_i64(*i),
+        Datum::U64(u) => *u = hash_u64(*u),
         Datum::F64(f) => *f = hash_f64(*f),
         Datum::Bytes(bytes) => *bytes = hash_string(bytes).to_vec(),
+
         Datum::Dur(_)
         | Datum::Dec(_)
         | Datum::Time(_)
         | Datum::Json(_)
         | Datum::Enum(_)
-        | Datum::Set(_) => return Err(datum),
+        | Datum::Set(_) => return Err(datum), // todo: not supported yet
     }
     Ok(datum)
 }
@@ -92,14 +101,31 @@ mod tests {
 
     #[test]
     fn test_workload_sim_mask() {
-        let datums = [
-            Datum::I64(42),
-            Datum::U64(42),
-            Datum::F64(42.42),
-            Datum::Bytes("Hello".as_bytes().to_vec()),
-            Datum::Bytes(b"\x01\x02".to_vec()),
+        let datum_pairs = [
+            (Datum::I64(42), Datum::I64(-113)),                           // 8
+            (Datum::I64(4200), Datum::I64(32405)),                        // 16
+            (Datum::I64(420000), Datum::I64(-5612912)),                   // 24
+            (Datum::I64(42000000), Datum::I64(-2040048546)),              // 32
+            (Datum::I64(420000000000), Datum::I64(-1884590655846725089)), // 64
+            (Datum::U64(42), Datum::U64(15)),                             // 8
+            (Datum::U64(4200), Datum::U64(65173)),                        // 16
+            (Datum::U64(420000), Datum::U64(2775696)),                    // 24
+            (Datum::U64(42000000), Datum::U64(107435102)),                // 32
+            (Datum::U64(420000000000), Datum::U64(16562153417862826527)), // 64
+            (Datum::F64(42.42), Datum::F64(7818787403329284e135)),
+            (
+                Datum::Bytes("你好".as_bytes().to_vec()),
+                Datum::Bytes(b"ba3468".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"\x01\x02".to_vec()),
+                Datum::Bytes(b"0a".to_vec()),
+            ),
         ];
 
-        let _ = datums.map(|d| workload_sim_mask(d, None).unwrap()).len();
+        for (from, expected) in datum_pairs {
+            let to = workload_sim_mask(from).unwrap();
+            assert_eq!(to, expected);
+        }
     }
 }

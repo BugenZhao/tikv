@@ -68,8 +68,7 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        let tp = &schema.columns[id];
-        let masked_datum = mask::workload_sim_mask(datum, Some(tp)).unwrap_or_else(|d| d);
+        let masked_datum = mask::workload_sim_mask(datum).unwrap_or_else(|d| d);
         hr_datum::write_bytes_to(&schema.columns[id], &mut res, &masked_datum);
         res.push(b',');
     }
@@ -369,7 +368,7 @@ mod tests {
             text.replace("<json>", &json_text)
         };
 
-        let columns = {
+        let _columns = {
             let col_1 = {
                 let mut ci: ColumnInfo = FieldTypeTp::Long.into();
                 ci.set_column_id(1);

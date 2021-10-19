@@ -3,19 +3,16 @@
 use crate::hr_datum::HrDatum;
 use collections::HashMap;
 use serde::{Deserialize, Serialize};
+use tidb_query_datatype::codec::{
+    datum::{Datum, DatumDecoder},
+    row::{
+        self,
+        v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
+    },
+    table::unflatten,
+};
 use tidb_query_datatype::codec::{table, Result as CodecResult};
 use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{
-    codec::{
-        datum::{Datum, DatumDecoder},
-        row::{
-            self,
-            v2::{encoder_for_test::RowEncoder, RowSlice, V1CompatibleEncoder},
-        },
-        table::unflatten,
-    },
-    FieldTypeAccessor,
-};
 use tipb::ColumnInfo;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -35,13 +32,7 @@ impl RowV1 {
         let (ids, datums) = table::decode_row_vec(&mut val, ctx, columns)?;
         let datums = datums
             .into_iter()
-            .zip(ids.iter())
-            .map(|(d, id)| {
-                HrDatum::with_workload_sim_mask(
-                    d,
-                    columns.get(id).map(|ci| ci as &dyn FieldTypeAccessor),
-                )
-            })
+            .map(HrDatum::with_workload_sim_mask)
             .collect();
         Ok(RowV1 { ids, datums })
     }
@@ -94,7 +85,7 @@ impl RowV2 {
                 };
                 let datum = unflatten(ctx, raw_datum, ci)?;
                 non_null_ids.push(id);
-                hr_datums.push(HrDatum::with_workload_sim_mask(datum, Some(ci)));
+                hr_datums.push(HrDatum::with_workload_sim_mask(datum));
             }
         }
         Ok(RowV2 {

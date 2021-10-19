@@ -18,13 +18,13 @@ impl HrHandle {
         let datums = decode_common_handle_into_datums(handle)
             .unwrap()
             .into_iter()
-            .map(|d| HrDatum::with_workload_sim_mask(d, None))
+            .map(HrDatum::with_workload_sim_mask)
             .collect();
         Self::Common(datums)
     }
 
     pub fn from_i64(int: i64) -> Self {
-        Self::Int(HrDatum::with_workload_sim_mask(Datum::I64(int), None))
+        Self::Int(HrDatum::with_workload_sim_mask(Datum::I64(int)))
     }
 }
 

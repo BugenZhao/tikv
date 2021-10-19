@@ -178,8 +178,8 @@ lazy_static::lazy_static! {
     static ref NULL_BUFFER_VEC: Arc<BufferVec> = Arc::new(BufferVec::new());
 }
 
-impl HrDatum {
-    pub fn without_mask(d: Datum) -> Self {
+impl From<Datum> for HrDatum {
+    fn from(d: Datum) -> Self {
         match d {
             Datum::Null => Self::Null,
             Datum::I64(v) => Self::I64(v),
@@ -208,10 +208,12 @@ impl HrDatum {
             Datum::Max => Self::Max,
         }
     }
+}
 
-    pub fn with_workload_sim_mask(d: Datum, field_type: Option<&dyn FieldTypeAccessor>) -> Self {
-        let d = workload_sim_mask(d, field_type).unwrap_or_else(|d| d);
-        Self::without_mask(d)
+impl HrDatum {
+    pub fn with_workload_sim_mask(d: Datum) -> Self {
+        let d = workload_sim_mask(d).unwrap_or_else(|d| d);
+        Self::from(d)
     }
 
     pub fn get_int_handle(self) -> i64 {
@@ -282,7 +284,7 @@ mod tests {
                 _ => unreachable!(),
             }
 
-            let hr = HrDatum::without_mask(datum);
+            let hr = HrDatum::from(datum);
             let dec_datum = hr.into();
             let mut enc = vec![];
             enc.write_datum(ctx, &[dec_datum], true).unwrap();
@@ -339,7 +341,7 @@ mod tests {
         ];
 
         for datum in datums {
-            let enc = to_text(HrDatum::without_mask(datum.clone()));
+            let enc = to_text(HrDatum::from(datum.clone()));
             println!("{}", enc);
             let dec: Datum = from_text::<HrDatum>(&enc).into();
 
