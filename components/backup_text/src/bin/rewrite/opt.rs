@@ -4,7 +4,6 @@ use external_storage_export::*;
 use kvproto::brpb::S3;
 use kvproto::brpb::{FileFormat, StorageBackend};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use structopt::StructOpt;
 use url::Url;
 

@@ -6,10 +6,9 @@ use tidb_query_datatype::codec::{
     data_type::{DateTime, Duration, Enum},
     Datum,
 };
+use tikv_util::warn;
 
 use crate::eval_context;
-
-pub type MaskResult = Result<Datum, Datum>;
 
 const DEFAULT_CONTEXT: &'static str = "tidb";
 
@@ -74,19 +73,22 @@ fn mask_f64(f: f64) -> f64 {
 
 fn mask_string(bytes: &[u8]) -> Vec<u8> {
     let size = bytes.len();
+    // bytes in hex format is always twice the length as the original
     let sum = hash_bytes(bytes, size / 2);
     let mut hex = hex::encode(sum);
-    hex.push_str(&"*".repeat(size - hex.len()));
+    hex.push_str(&"*".repeat(size - hex.len())); // 0 or 1 '*'
     hex.into_bytes()
 }
 
 fn mask_duration(dur: Duration) -> Duration {
+    // todo: a trivial mask function
     let secs = dur.to_secs() / 3600 * 3600;
     let fsp = dur.fsp() as i8;
     Duration::from_secs(secs, fsp).unwrap()
 }
 
 fn mask_time(time: DateTime) -> DateTime {
+    // todo: a trivial mask function
     let ctx = &mut eval_context();
 
     let year = time.year();
@@ -105,7 +107,7 @@ fn mask_time(time: DateTime) -> DateTime {
     .unwrap()
 }
 
-pub fn workload_sim_mask(mut datum: Datum) -> MaskResult {
+pub fn workload_sim_mask(mut datum: Datum) -> Datum {
     match &mut datum {
         Datum::Null => {}
         Datum::Min => {}
@@ -122,11 +124,12 @@ pub fn workload_sim_mask(mut datum: Datum) -> MaskResult {
         Datum::Time(time) => *time = mask_time(*time),
 
         Datum::Dec(_) | Datum::Json(_) | Datum::Set(_) => {
-            return Err(datum); // todo: not supported yet
+            // todo: not supported yet
+            warn!("mask not supported yet"; "datum" => ?datum);
         }
     }
 
-    Ok(datum)
+    datum
 }
 
 #[cfg(test)]
@@ -187,7 +190,7 @@ mod tests {
         ];
 
         for (from, expected) in datum_pairs {
-            let to = workload_sim_mask(from).unwrap();
+            let to = workload_sim_mask(from);
             println!("{:?}", to);
             assert_eq!(to, expected);
         }

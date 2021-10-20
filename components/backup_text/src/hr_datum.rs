@@ -212,14 +212,13 @@ impl From<Datum> for HrDatum {
 
 impl HrDatum {
     pub fn with_workload_sim_mask(d: Datum) -> Self {
-        let d = workload_sim_mask(d).unwrap_or_else(|d| d);
-        Self::from(d)
+        Self::from(workload_sim_mask(d))
     }
 
     pub fn get_int_handle(self) -> i64 {
         match self {
             HrDatum::I64(i) => i,
-            _ => 0,
+            _ => panic!("not an i64"),
         }
     }
 }

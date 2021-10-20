@@ -68,7 +68,7 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        let masked_datum = mask::workload_sim_mask(datum).unwrap_or_else(|d| d);
+        let masked_datum = mask::workload_sim_mask(datum);
         hr_datum::write_bytes_to(&schema.columns[id], &mut res, &masked_datum);
         res.push(b',');
     }
