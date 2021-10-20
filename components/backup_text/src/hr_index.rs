@@ -80,7 +80,7 @@ impl HrIndex {
         // TODO: unflatten
         let handles = datum::decode(&mut &raw_key[table::PREFIX_LEN + table::ID_LEN..])?
             .into_iter()
-            .map(HrDatum::from)
+            .map(HrDatum::with_workload_sim_mask)
             .collect();
         Ok(HrIndexKey {
             table_id,
@@ -151,7 +151,7 @@ impl HrIndex {
         if !common_handle_bytes.is_empty() {
             let handles = datum::decode(&mut common_handle_bytes)?
                 .into_iter()
-                .map(HrDatum::from)
+                .map(HrDatum::with_workload_sim_mask)
                 .collect();
             common_handle = Some(handles);
         }

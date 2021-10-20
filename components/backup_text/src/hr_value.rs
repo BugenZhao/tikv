@@ -18,7 +18,7 @@ use tipb::ColumnInfo;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RowV1 {
     #[serde(rename = "#")]
-    pub ids: Vec<u32>,
+    pub ids: Vec<i64>,
     #[serde(rename = "d")]
     pub datums: Vec<HrDatum>,
 }
@@ -30,13 +30,15 @@ impl RowV1 {
         columns: &HashMap<i64, ColumnInfo>,
     ) -> CodecResult<RowV1> {
         let (ids, datums) = table::decode_row_vec(&mut val, ctx, columns)?;
-        let datums = datums.into_iter().map(HrDatum::from).collect();
+        let datums = datums
+            .into_iter()
+            .map(HrDatum::with_workload_sim_mask)
+            .collect();
         Ok(RowV1 { ids, datums })
     }
 
     pub fn into_bytes(self, ctx: &mut EvalContext) -> CodecResult<Vec<u8>> {
         let RowV1 { ids, datums } = self;
-        let ids: Vec<_> = ids.into_iter().map(|i| i as i64).collect();
         let datums = datums.into_iter().map(|d| d.into()).collect();
         let value = table::encode_row(ctx, datums, &ids).unwrap();
         Ok(value)
@@ -83,7 +85,7 @@ impl RowV2 {
                 };
                 let datum = unflatten(ctx, raw_datum, ci)?;
                 non_null_ids.push(id);
-                hr_datums.push(HrDatum::from(datum));
+                hr_datums.push(HrDatum::with_workload_sim_mask(datum));
             }
         }
         Ok(RowV2 {

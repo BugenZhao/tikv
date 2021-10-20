@@ -7,13 +7,13 @@ use crate::{
     hr_kv::HrKv,
     hr_value::HrValue,
     hr_write::{HrIndexKvWrite, HrKvWrite, HrWrite},
+    mask,
     rwer::Schema,
     to_text, Result,
 };
 use collections::HashMap;
 use tidb_query_datatype::codec::datum::{Datum, DatumDecoder};
 use tidb_query_datatype::codec::table::unflatten;
-use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::{codec::Result as CodecResult, expr::EvalContext};
 use tipb::ColumnInfo;
 use txn_types::WriteRef;
@@ -44,7 +44,7 @@ pub fn kv_to_csv(
                 if schema.primary_handle.is_none() {
                     return Err(format!("unexpect empty primary_handle").into());
                 }
-                datums_map.insert(schema.primary_handle.unwrap(), Datum::I64(pk));
+                datums_map.insert(schema.primary_handle.unwrap(), pk.into());
             }
             HrHandle::Common(ch) => {
                 if schema.common_handle.is_empty() {
@@ -58,7 +58,7 @@ pub fn kv_to_csv(
     }
     let mut res = Vec::new();
     for id in &schema.column_ids {
-        let d = match datums_map.remove(id) {
+        let datum = match datums_map.remove(id) {
             Some(d) => d,
             None if !schema.columns[id].get_default_val().is_empty() => {
                 // Set to the default value
@@ -68,7 +68,8 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        hr_datum::desensitize(ctx, &schema.columns[id], &mut res, &d);
+        let masked_datum = mask::workload_sim_mask(datum);
+        hr_datum::write_bytes_to(&schema.columns[id], &mut res, &masked_datum);
         res.push(b',');
     }
     if !res.is_empty() {
@@ -367,7 +368,7 @@ mod tests {
             text.replace("<json>", &json_text)
         };
 
-        let columns = {
+        let _columns = {
             let col_1 = {
                 let mut ci: ColumnInfo = FieldTypeTp::Long.into();
                 ci.set_column_id(1);
