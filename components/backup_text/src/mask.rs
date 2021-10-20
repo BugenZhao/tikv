@@ -6,7 +6,6 @@ use tidb_query_datatype::codec::{
     data_type::{DateTime, Duration, Enum},
     Datum,
 };
-use tikv_util::warn;
 
 use crate::eval_context;
 
@@ -125,7 +124,6 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
 
         Datum::Dec(_) | Datum::Json(_) | Datum::Set(_) => {
             // todo: not supported yet
-            warn!("mask not supported yet"; "datum" => ?datum);
         }
     }
 
