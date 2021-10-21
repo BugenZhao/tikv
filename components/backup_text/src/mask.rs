@@ -106,26 +106,26 @@ fn mask_time(time: DateTime) -> DateTime {
     .unwrap()
 }
 
-pub fn workload_sim_mask(mut datum: Datum) -> Datum {
-    match &mut datum {
-        Datum::Null => {}
-        Datum::Min => {}
-        Datum::Max => {}
-        Datum::I64(i) => *i = mask_i64(*i),
-        Datum::U64(u) => *u = mask_u64(*u),
-        Datum::F64(f) => *f = mask_f64(*f),
-        Datum::Bytes(bytes) => *bytes = mask_string(bytes).to_vec(),
-        Datum::Enum(e) => {
-            let masked_name = mask_string(e.name()).to_vec();
-            *e = Enum::new(masked_name, e.value())
-        }
-        Datum::Dur(dur) => *dur = mask_duration(*dur),
-        Datum::Time(time) => *time = mask_time(*time),
+pub fn workload_sim_mask(mut datum: Datum) -> Datum {    
+    // match &mut datum {
+    //     Datum::Null => {}
+    //     Datum::Min => {}
+    //     Datum::Max => {}
+    //     Datum::I64(i) => *i = mask_i64(*i),
+    //     Datum::U64(u) => *u = mask_u64(*u),
+    //     Datum::F64(f) => *f = mask_f64(*f),
+    //     Datum::Bytes(bytes) => *bytes = mask_string(bytes).to_vec(),
+    //     Datum::Enum(e) => {
+    //         let masked_name = mask_string(e.name()).to_vec();
+    //         *e = Enum::new(masked_name, e.value())
+    //     }
+    //     Datum::Dur(dur) => *dur = mask_duration(*dur),
+    //     Datum::Time(time) => *time = mask_time(*time),
 
-        Datum::Dec(_) | Datum::Json(_) | Datum::Set(_) => {
-            // todo: not supported yet
-        }
-    }
+    //     Datum::Dec(_) | Datum::Json(_) | Datum::Set(_) => {
+    //         // todo: not supported yet
+    //     }
+    // }
 
     datum
 }
