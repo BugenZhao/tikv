@@ -23,10 +23,14 @@ pub fn kv_to_text(
     key: &[u8],
     val: &[u8],
     columns: &HashMap<i64, ColumnInfo>,
+    mask: bool,
 ) -> CodecResult<String> {
-    let key = HrDataKey::from_encoded(key);
-    let value = HrValue::from_bytes(ctx, val, columns)?;
-
+    let mut key = HrDataKey::from_encoded(key);
+    let mut value = HrValue::from_bytes(ctx, val, columns)?;
+    if mask {
+        key.mask();
+        value.mask();
+    }
     Ok(to_text(HrKv { key, value }))
 }
 
@@ -35,6 +39,7 @@ pub fn kv_to_csv(
     schema: &Schema,
     key: &[u8],
     val: &[u8],
+    mask: bool,
 ) -> Result<Vec<u8>> {
     let mut datums_map = HrValue::to_datums(ctx, &schema.columns, val)?;
     if schema.handle_in_key() {
@@ -58,7 +63,7 @@ pub fn kv_to_csv(
     }
     let mut res = Vec::new();
     for id in &schema.column_ids {
-        let datum = match datums_map.remove(id) {
+        let mut datum = match datums_map.remove(id) {
             Some(d) => d,
             None if !schema.columns[id].get_default_val().is_empty() => {
                 // Set to the default value
@@ -68,8 +73,10 @@ pub fn kv_to_csv(
             }
             None => Datum::Null,
         };
-        let masked_datum = mask::workload_sim_mask(datum);
-        hr_datum::write_bytes_to(&schema.columns[id], &mut res, &masked_datum);
+        if mask {
+            datum = mask::workload_sim_mask(datum);
+        }
+        hr_datum::write_bytes_to(&schema.columns[id], &mut res, &datum);
         res.push(b',');
     }
     if !res.is_empty() {
@@ -83,9 +90,14 @@ pub fn index_kv_to_text(
     key: &[u8],
     val: &[u8],
     columns: &HashMap<i64, ColumnInfo>,
+    mask: bool,
 ) -> Result<String> {
-    let key = HrIndex::decode_index_key(key)?;
-    let value = HrIndex::decode_index_value(val, ctx, columns)?;
+    let mut key = HrIndex::decode_index_key(key)?;
+    let mut value = HrIndex::decode_index_value(val, ctx, columns)?;
+    if mask {
+        key.mask();
+        value.mask();
+    }
     Ok(to_text(HrIndex { key, value }))
 }
 
@@ -110,11 +122,15 @@ pub fn kv_to_write(
     key: &[u8],
     val: &[u8],
     columns: &HashMap<i64, ColumnInfo>,
+    mask: bool,
 ) -> String {
-    let hr_write = HrKvWrite {
+    let mut hr_write = HrKvWrite {
         key: HrDataKey::from_encoded(&key),
         value: HrWrite::from_ref_data(ctx, WriteRef::parse(val).unwrap(), columns),
     };
+    if mask {
+        hr_write.mask();
+    }
     to_text(hr_write)
 }
 
@@ -123,11 +139,12 @@ pub fn kv_to_csv_write(
     schema: &Schema,
     key: &[u8],
     val: &[u8],
+    mask: bool,
 ) -> Option<Result<Vec<u8>>> {
     let write_ref = WriteRef::parse(val).unwrap();
     write_ref
         .short_value
-        .map(|val| kv_to_csv(ctx, schema, key, val))
+        .map(|val| kv_to_csv(ctx, schema, key, val, mask))
 }
 
 pub fn write_to_kv(ctx: &mut EvalContext, line: &str) -> (Vec<u8>, Vec<u8>) {
@@ -143,11 +160,15 @@ pub fn index_kv_to_write(
     key: &[u8],
     val: &[u8],
     columns: &HashMap<i64, ColumnInfo>,
+    mask: bool,
 ) -> String {
-    let hr_write = HrIndexKvWrite {
+    let mut hr_write = HrIndexKvWrite {
         key: HrIndex::decode_index_key(key).unwrap(),
         value: HrWrite::from_ref_index(ctx, WriteRef::parse(val).unwrap(), columns),
     };
+    if mask {
+        hr_write.mask();
+    }
     to_text(hr_write)
 }
 
@@ -317,7 +338,7 @@ mod tests {
 
         let val = encode_row(ctx, col_values.clone(), &col_ids).unwrap();
 
-        let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
+        let text = kv_to_text(ctx, &key, &val, &cols_v1, false).unwrap();
         println!("{}", text);
 
         let (restored_key, restored_val) = text_to_kv(ctx, &text);
@@ -342,7 +363,7 @@ mod tests {
             buf
         };
 
-        let text = kv_to_text(ctx, &key, &val, &cols_v1).unwrap();
+        let text = kv_to_text(ctx, &key, &val, &cols_v1, false).unwrap();
         println!("{}", text);
 
         let (restored_key, restored_val) = text_to_kv(ctx, &text);

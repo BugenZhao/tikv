@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tidb_query_datatype::codec::{table::*, Datum};
 use txn_types::{Key, TimeStamp};
 
+use crate::mask::mask_hr_datum;
 use crate::{eval_context, hr_datum::HrDatum};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,13 +19,20 @@ impl HrHandle {
         let datums = decode_common_handle_into_datums(handle)
             .unwrap()
             .into_iter()
-            .map(HrDatum::with_workload_sim_mask)
+            .map(HrDatum::from)
             .collect();
         Self::Common(datums)
     }
 
     pub fn from_i64(int: i64) -> Self {
-        Self::Int(HrDatum::with_workload_sim_mask(Datum::I64(int)))
+        Self::Int(HrDatum::from(Datum::I64(int)))
+    }
+
+    fn mask(&mut self) {
+        match self {
+            HrHandle::Common(ds) => ds.iter_mut().for_each(mask_hr_datum),
+            HrHandle::Int(ref mut d) => mask_hr_datum(d),
+        }
     }
 }
 
@@ -80,6 +88,10 @@ impl HrDataKey {
         let origin_encoded_key = key.into_encoded();
 
         keys::data_key(&origin_encoded_key)
+    }
+
+    pub fn mask(&mut self) {
+        self.handle.mask()
     }
 }
 

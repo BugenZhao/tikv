@@ -159,33 +159,37 @@ impl TextWriter {
             }
             self.data_type.as_ref().unwrap()
         };
-
+        // TODO: make `mask` as an option
+        let mask = true;
         let mut v = match self.format {
             FileFormat::Text => match (self.cf, data_type) {
                 (CF_DEFAULT, DataType::Record) => {
-                    kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
+                    kv_to_text(&mut self.ctx, key, val, &self.schema.columns, mask)
                         .unwrap()
                         .into_bytes()
                 }
                 (CF_DEFAULT, DataType::Index) => {
-                    index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns)
+                    index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns, mask)
                         .unwrap()
                         .into_bytes()
                 }
                 (CF_WRITE, DataType::Record) => {
-                    kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
+                    kv_to_write(&mut self.ctx, key, val, &self.schema.columns, mask).into_bytes()
                 }
                 (CF_WRITE, DataType::Index) => {
-                    index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns).into_bytes()
+                    index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns, mask)
+                        .into_bytes()
                 }
                 _ => unreachable!(),
             },
             FileFormat::Csv => match (self.cf, data_type) {
                 (CF_DEFAULT, DataType::Record) => {
-                    kv_to_csv(&mut self.ctx, &self.schema, key, val).unwrap()
+                    kv_to_csv(&mut self.ctx, &self.schema, key, val, mask).unwrap()
                 }
                 (CF_WRITE, DataType::Record) => {
-                    if let Some(result) = kv_to_csv_write(&mut self.ctx, &self.schema, key, val) {
+                    if let Some(result) =
+                        kv_to_csv_write(&mut self.ctx, &self.schema, key, val, mask)
+                    {
                         result.unwrap()
                     } else {
                         return Ok(());

@@ -17,12 +17,26 @@ pub struct HrKvWrite {
     pub value: HrWrite,
 }
 
+impl HrKvWrite {
+    pub fn mask(&mut self) {
+        self.key.mask();
+        self.value.mask();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrIndexKvWrite {
     #[serde(rename = "k")]
     pub key: HrIndexKey,
     #[serde(rename = "v")]
     pub value: HrWrite,
+}
+
+impl HrIndexKvWrite {
+    pub fn mask(&mut self) {
+        self.key.mask();
+        self.value.mask();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +133,15 @@ impl HrWrite {
             has_overlapped_rollback: wr.has_overlapped_rollback,
             gc_fence: wr.gc_fence.map(|t| t.into_inner()),
             value,
+        }
+    }
+
+    pub fn mask(&mut self) {
+        if let Some(ref mut v) = self.value {
+            match v {
+                HrShortValue::Index(i) => i.mask(),
+                HrShortValue::Record(r) => r.mask(),
+            }
         }
     }
 }

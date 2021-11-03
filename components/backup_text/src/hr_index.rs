@@ -2,6 +2,7 @@
 
 use crate::hr_datum::{HrBytes, HrDatum};
 use crate::hr_value::RowV2;
+use crate::mask::{mask_bytes, mask_hr_datum};
 use crate::Result;
 use codec::number::NumberCodec;
 use codec::prelude::{NumberDecoder, NumberEncoder};
@@ -28,6 +29,12 @@ pub struct HrIndexKey {
     ts: u64,
 }
 
+impl HrIndexKey {
+    pub fn mask(&mut self) {
+        self.handles.iter_mut().for_each(mask_hr_datum)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HrIndexValue {
     #[serde(rename = "t", skip_serializing_if = "Option::is_none", default)]
@@ -42,6 +49,18 @@ pub struct HrIndexValue {
     restore_data: Option<RowV2>,
     #[serde(rename = "T", skip_serializing_if = "Option::is_none", default)]
     tail: Option<HrIndexTail>,
+}
+
+impl HrIndexValue {
+    pub fn mask(&mut self) {
+        if let Some(ch) = self.common_handle.as_mut() {
+            ch.iter_mut().for_each(mask_hr_datum);
+        }
+        if let Some(rd) = self.restore_data.as_mut() {
+            rd.mask();
+        }
+        // No need to mask index tail since it doesn't contain user data
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +99,7 @@ impl HrIndex {
         // TODO: unflatten
         let handles = datum::decode(&mut &raw_key[table::PREFIX_LEN + table::ID_LEN..])?
             .into_iter()
-            .map(HrDatum::with_workload_sim_mask)
+            .map(HrDatum::from)
             .collect();
         Ok(HrIndexKey {
             table_id,
@@ -151,7 +170,7 @@ impl HrIndex {
         if !common_handle_bytes.is_empty() {
             let handles = datum::decode(&mut common_handle_bytes)?
                 .into_iter()
-                .map(HrDatum::with_workload_sim_mask)
+                .map(HrDatum::from)
                 .collect();
             common_handle = Some(handles);
         }

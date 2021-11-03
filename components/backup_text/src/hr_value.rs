@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::hr_datum::HrDatum;
+use crate::mask::mask_hr_datum;
 use collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tidb_query_datatype::codec::{
@@ -30,10 +31,7 @@ impl RowV1 {
         columns: &HashMap<i64, ColumnInfo>,
     ) -> CodecResult<RowV1> {
         let (ids, datums) = table::decode_row_vec(&mut val, ctx, columns)?;
-        let datums = datums
-            .into_iter()
-            .map(HrDatum::with_workload_sim_mask)
-            .collect();
+        let datums = datums.into_iter().map(HrDatum::from).collect();
         Ok(RowV1 { ids, datums })
     }
 
@@ -50,6 +48,10 @@ impl RowV1 {
         mut val: &[u8],
     ) -> CodecResult<HashMap<i64, Datum>> {
         Ok(table::decode_row(&mut val, ctx, columns)?)
+    }
+
+    pub fn mask(&mut self) {
+        self.datums.iter_mut().for_each(mask_hr_datum)
     }
 }
 
@@ -85,7 +87,7 @@ impl RowV2 {
                 };
                 let datum = unflatten(ctx, raw_datum, ci)?;
                 non_null_ids.push(id);
-                hr_datums.push(HrDatum::with_workload_sim_mask(datum));
+                hr_datums.push(HrDatum::from(datum));
             }
         }
         Ok(RowV2 {
@@ -134,6 +136,10 @@ impl RowV2 {
         }
         Ok(datums_map)
     }
+
+    pub fn mask(&mut self) {
+        self.datums.iter_mut().for_each(mask_hr_datum)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,5 +183,12 @@ impl HrValue {
             row::v2::CODEC_VERSION => RowV2::to_datums(ctx, columns, val)?,
             _ => RowV1::to_datums(ctx, columns, val)?,
         })
+    }
+
+    pub fn mask(&mut self) {
+        match self {
+            HrValue::V1(v1) => v1.mask(),
+            HrValue::V2(v2) => v2.mask(),
+        }
     }
 }

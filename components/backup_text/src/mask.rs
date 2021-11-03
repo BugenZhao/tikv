@@ -8,6 +8,7 @@ use tidb_query_datatype::codec::{
 };
 
 use crate::eval_context;
+use crate::hr_datum::*;
 
 const DEFAULT_CONTEXT: &'static str = "tidb";
 
@@ -126,8 +127,37 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
             // todo: not supported yet
         }
     }
-
     datum
+}
+
+pub fn mask_bytes(b: &mut HrBytes) {
+    match b {
+        HrBytes::Utf8(s) => {
+            // Safety depend on `mask_string` return a slice of bytes of valid utf8 string
+            *s = unsafe { String::from_utf8_unchecked(mask_string(s.as_bytes())) };
+        }
+        HrBytes::Raw(r) => *r = mask_string(&r),
+    }
+}
+
+pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
+    match hr_datum {
+        HrDatum::Null | HrDatum::Max | HrDatum::Min => {}
+        HrDatum::I64(i) => *i = mask_i64(*i),
+        HrDatum::U64(u) => *u = mask_u64(*u),
+        HrDatum::F64(f) => *f = mask_f64(*f),
+        HrDatum::Bytes(b) => mask_bytes(b),
+        HrDatum::Enum(e) => mask_bytes(&mut e.name),
+        // TODO: support directly mask `HrDatum::Dur` and `HrDatum::Time`
+        HrDatum::Dur(d) => {
+            *d = HrDuration::from(mask_duration(d.to_duration()));
+        }
+        HrDatum::Time(t) => {
+            *t = HrTime::from(mask_time(t.to_time()));
+        }
+        // TODO: not supported yet
+        HrDatum::Dec(_) | HrDatum::Json(_) | HrDatum::Set(_) => {}
+    }
 }
 
 #[cfg(test)]

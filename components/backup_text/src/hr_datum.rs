@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::eval_context;
-use crate::mask::workload_sim_mask;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
@@ -48,6 +47,18 @@ pub struct HrDuration {
     fsp: u8,
 }
 
+impl HrDuration {
+    pub fn from(d: Duration) -> HrDuration {
+        HrDuration {
+            value: d.to_string(),
+            fsp: d.fsp(),
+        }
+    }
+    pub fn to_duration(&self) -> Duration {
+        Duration::parse(&mut eval_context(), &self.value, self.fsp as i8).unwrap()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HrBytes {
@@ -87,6 +98,18 @@ pub struct HrTime {
     raw: u64,
 }
 
+impl HrTime {
+    pub fn from(t: Time) -> HrTime {
+        HrTime {
+            value: t.to_string(),
+            raw: t.0,
+        }
+    }
+    pub fn to_time(&self) -> Time {
+        Time(self.raw)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HrJson(pub Json);
 
@@ -113,9 +136,9 @@ impl<'de> Deserialize<'de> for HrJson {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrEnum {
     #[serde(rename = "n")]
-    name: HrBytes,
+    pub name: HrBytes,
     #[serde(rename = "v")]
-    value: u64,
+    pub value: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,16 +208,10 @@ impl From<Datum> for HrDatum {
             Datum::I64(v) => Self::I64(v),
             Datum::U64(v) => Self::U64(v),
             Datum::F64(v) => Self::F64(v),
-            Datum::Dur(d) => Self::Dur(HrDuration {
-                value: d.to_string(),
-                fsp: d.fsp(),
-            }),
+            Datum::Dur(d) => Self::Dur(HrDuration::from(d)),
             Datum::Bytes(v) => Self::Bytes(HrBytes::from(v)),
             Datum::Dec(d) => Self::Dec(d.into()),
-            Datum::Time(t) => Self::Time(HrTime {
-                value: t.to_string(),
-                raw: t.0,
-            }),
+            Datum::Time(t) => Self::Time(HrTime::from(t)),
             Datum::Json(j) => Self::Json(HrJson(j)),
             Datum::Enum(e) => Self::Enum(HrEnum {
                 name: HrBytes::from(e.name().to_vec()),
@@ -211,10 +228,6 @@ impl From<Datum> for HrDatum {
 }
 
 impl HrDatum {
-    pub fn with_workload_sim_mask(d: Datum) -> Self {
-        Self::from(workload_sim_mask(d))
-    }
-
     pub fn get_int_handle(self) -> i64 {
         match self {
             HrDatum::I64(i) => i,
