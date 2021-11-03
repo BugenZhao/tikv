@@ -4,6 +4,7 @@ use std::convert::{TryFrom, TryInto};
 
 use tidb_query_datatype::codec::{
     data_type::{DateTime, Duration, Enum},
+    mysql::last_day_of_month,
     Datum,
 };
 
@@ -81,28 +82,31 @@ fn mask_string(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn mask_duration(dur: Duration) -> Duration {
-    // todo: a trivial mask function
-    let secs = dur.to_secs() / 3600 * 3600;
-    let fsp = dur.fsp() as i8;
-    Duration::from_secs(secs, fsp).unwrap()
+    let nanos = mask_i64(dur.to_nanos());
+    Duration::new(nanos, dur.fsp())
 }
 
 fn mask_time(time: DateTime) -> DateTime {
-    // todo: a trivial mask function
     let ctx = &mut eval_context();
+    let (fsp, time_type) = (time.fsp(), time.get_time_type());
 
-    let year = time.year();
-    let month = time.month();
-    let day = time.day();
-    let fsp = time.fsp() as i8;
-    let time_type = time.get_time_type();
+    // Get a masked but unchecked time
+    let unchecked_time = DateTime(mask_u64(time.0));
 
-    DateTime::parse(
+    // Adjust time to a valid range
+    let year = unchecked_time.year() % 10000; // 0..9999
+    let month = (unchecked_time.month() % 12) + 1; // 1..12
+    let day = (unchecked_time.day() % last_day_of_month(year, month)) + 1; // 1..28/29/30/31
+    let hour = unchecked_time.hour() % 24; // 0..23
+    let minute = unchecked_time.minute() % 60; // 0..59
+    let second = unchecked_time.second() % 60; // 0..59
+    let micro = unchecked_time.micro() % 1000000; // 0..999999
+
+    DateTime::from_slice(
         ctx,
-        &format!("{}-{}-{}", year, month, day),
+        &[year, month, day, hour, minute, second, micro][..],
         time_type,
         fsp,
-        true,
     )
     .unwrap()
 }

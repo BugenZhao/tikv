@@ -56,7 +56,7 @@ fn is_leap_year(year: u32) -> bool {
     year & 3 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
-fn last_day_of_month(year: u32, month: u32) -> u32 {
+pub fn last_day_of_month(year: u32, month: u32) -> u32 {
     match month {
         4 | 6 | 9 | 11 => 30,
         2 => is_leap_year(year) as u32 + 28,
@@ -982,7 +982,7 @@ impl TimeArgs {
 
 // Utility
 impl Time {
-    fn from_slice(
+    pub fn from_slice(
         ctx: &mut EvalContext,
         parts: &[u32],
         time_type: TimeType,

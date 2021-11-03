@@ -39,4 +39,4 @@ pub use self::json::{
     ModifyType, PathExpression,
 };
 pub use self::set::{Set, SetRef};
-pub use self::time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz};
+pub use self::time::{last_day_of_month, Time, TimeDecoder, TimeEncoder, TimeType, Tz};
