@@ -144,9 +144,9 @@ pub struct HrEnum {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HrSet {
     #[serde(rename = "d")]
-    data: HrBytes,
+    pub data: HrBytes,
     #[serde(rename = "v")]
-    value: u64,
+    pub value: u64,
 }
 
 impl From<Vec<u8>> for HrBytes {

@@ -30,6 +30,9 @@ impl Set {
     pub fn new(data: Arc<BufferVec>, value: u64) -> Self {
         Self { data, value }
     }
+    pub fn data(&self) -> Arc<BufferVec> {
+        self.data.clone()
+    }
     pub fn value(&self) -> u64 {
         self.value
     }

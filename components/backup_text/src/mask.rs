@@ -1,12 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::{TryFrom, TryInto};
+use std::sync::Arc;
 
 use tidb_query_datatype::codec::{
-    data_type::{DateTime, Duration, Enum},
+    data_type::{DateTime, Duration, Enum, Set},
     mysql::last_day_of_month,
     Datum,
 };
+use tikv_util::buffer_vec::BufferVec;
 
 use crate::eval_context;
 use crate::hr_datum::*;
@@ -119,15 +121,23 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
         Datum::I64(i) => *i = mask_i64(*i),
         Datum::U64(u) => *u = mask_u64(*u),
         Datum::F64(f) => *f = mask_f64(*f),
-        Datum::Bytes(bytes) => *bytes = mask_string(bytes).to_vec(),
+        Datum::Bytes(bytes) => *bytes = mask_string(bytes),
         Datum::Enum(e) => {
-            let masked_name = mask_string(e.name()).to_vec();
+            let masked_name = mask_string(e.name());
             *e = Enum::new(masked_name, e.value())
         }
         Datum::Dur(dur) => *dur = mask_duration(*dur),
         Datum::Time(time) => *time = mask_time(*time),
+        Datum::Set(s) => {
+            let (data, value) = (s.data(), s.value());
+            let mut masked_data = BufferVec::with_capacity(data.capacity(), data.data_capacity());
+            for e in data.iter() {
+                masked_data.push(mask_string(e));
+            }
+            *s = Set::new(Arc::new(masked_data), value);
+        }
 
-        Datum::Dec(_) | Datum::Json(_) | Datum::Set(_) => {
+        Datum::Dec(_) | Datum::Json(_) => {
             // todo: not supported yet
         }
     }
@@ -152,6 +162,24 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
         HrDatum::F64(f) => *f = mask_f64(*f),
         HrDatum::Bytes(b) => mask_bytes(b),
         HrDatum::Enum(e) => mask_bytes(&mut e.name),
+        HrDatum::Set(set) => {
+            match set.data {
+                HrBytes::Utf8(ref mut s) => {
+                    let mut res = String::new();
+                    for e in s.split(',') {
+                        if !res.is_empty() {
+                            res.push(',');
+                        }
+                        // Safety depend on `mask_string` return a slice of bytes of valid utf8 string
+                        let masked_e =
+                            unsafe { String::from_utf8_unchecked(mask_string(e.as_bytes())) };
+                        res.push_str(masked_e.as_str());
+                    }
+                    *s = res;
+                }
+                _ => unreachable!(),
+            }
+        }
         // TODO: support directly mask `HrDatum::Dur` and `HrDatum::Time`
         HrDatum::Dur(d) => {
             *d = HrDuration::from(mask_duration(d.to_duration()));
@@ -160,7 +188,7 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
             *t = HrTime::from(mask_time(t.to_time()));
         }
         // TODO: not supported yet
-        HrDatum::Dec(_) | HrDatum::Json(_) | HrDatum::Set(_) => {}
+        HrDatum::Dec(_) | HrDatum::Json(_) => {}
     }
 }
 
