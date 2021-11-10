@@ -74,6 +74,14 @@ pub struct HrDecimal {
     prec: u8,
 }
 
+impl HrDecimal {
+    pub fn to_decimal(&self) -> Decimal {
+        let mut d = self.value.parse::<Decimal>().unwrap();
+        d.set_preferred_prec(Some(self.prec));
+        d
+    }
+}
+
 impl From<Decimal> for HrDecimal {
     fn from(d: Decimal) -> Self {
         let (prec, _) = d.preferred_prec_and_frac();
@@ -84,9 +92,7 @@ impl From<Decimal> for HrDecimal {
 
 impl Into<Decimal> for HrDecimal {
     fn into(self) -> Decimal {
-        let mut d = self.value.parse::<Decimal>().unwrap();
-        d.set_preferred_prec(Some(self.prec));
-        d
+        self.to_decimal()
     }
 }
 

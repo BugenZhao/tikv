@@ -4,10 +4,12 @@ use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use tidb_query_datatype::codec::{
-    data_type::{DateTime, Duration, Enum, Set},
+    convert::ConvertTo,
+    data_type::{DateTime, Decimal, Duration, Enum, Set},
     mysql::last_day_of_month,
     Datum,
 };
+use tidb_query_datatype::expr::EvalContext;
 use tikv_util::buffer_vec::BufferVec;
 
 use crate::eval_context;
@@ -88,8 +90,7 @@ fn mask_duration(dur: Duration) -> Duration {
     Duration::new(nanos, dur.fsp())
 }
 
-fn mask_time(time: DateTime) -> DateTime {
-    let ctx = &mut eval_context();
+fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     let (fsp, time_type) = (time.fsp(), time.get_time_type());
 
     // Get a masked but unchecked time
@@ -113,7 +114,12 @@ fn mask_time(time: DateTime) -> DateTime {
     .unwrap()
 }
 
+fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
+    mask_f64(d.convert(ctx).unwrap()).convert(ctx).unwrap()
+}
+
 pub fn workload_sim_mask(mut datum: Datum) -> Datum {
+    let ctx = &mut eval_context();
     match &mut datum {
         Datum::Null => {}
         Datum::Min => {}
@@ -127,7 +133,7 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
             *e = Enum::new(masked_name, e.value())
         }
         Datum::Dur(dur) => *dur = mask_duration(*dur),
-        Datum::Time(time) => *time = mask_time(*time),
+        Datum::Time(time) => *time = mask_time(ctx, *time),
         Datum::Set(s) => {
             let (data, value) = (s.data(), s.value());
             let mut masked_data = BufferVec::with_capacity(data.capacity(), data.data_capacity());
@@ -136,8 +142,8 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
             }
             *s = Set::new(Arc::new(masked_data), value);
         }
-
-        Datum::Dec(_) | Datum::Json(_) => {
+        Datum::Dec(d) => *d = mask_decimal(ctx, &d),
+        Datum::Json(_) => {
             // todo: not supported yet
         }
     }
@@ -155,6 +161,7 @@ pub fn mask_bytes(b: &mut HrBytes) {
 }
 
 pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
+    let ctx = &mut eval_context();
     match hr_datum {
         HrDatum::Null | HrDatum::Max | HrDatum::Min => {}
         HrDatum::I64(i) => *i = mask_i64(*i),
@@ -180,15 +187,16 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
                 _ => unreachable!(),
             }
         }
-        // TODO: support directly mask `HrDatum::Dur` and `HrDatum::Time`
+        // TODO: support directly mask `HrDatum::Dur`, `HrDatum::Time` and `HrDatum::Dec`
         HrDatum::Dur(d) => {
             *d = HrDuration::from(mask_duration(d.to_duration()));
         }
         HrDatum::Time(t) => {
-            *t = HrTime::from(mask_time(t.to_time()));
+            *t = HrTime::from(mask_time(ctx, t.to_time()));
         }
+        HrDatum::Dec(d) => *d = HrDecimal::from(mask_decimal(ctx, &d.to_decimal())),
         // TODO: not supported yet
-        HrDatum::Dec(_) | HrDatum::Json(_) => {}
+        HrDatum::Json(_) => {}
     }
 }
 

@@ -2,7 +2,7 @@
 
 use crate::hr_datum::{HrBytes, HrDatum};
 use crate::hr_value::RowV2;
-use crate::mask::{mask_bytes, mask_hr_datum};
+use crate::mask::mask_hr_datum;
 use crate::Result;
 use codec::number::NumberCodec;
 use codec::prelude::{NumberDecoder, NumberEncoder};

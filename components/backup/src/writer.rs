@@ -19,7 +19,7 @@ use protobuf::Message;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{
-    self, box_err, error, info,
+    self, box_err, error,
     time::{Instant, Limiter},
 };
 use tipb::TableInfo;
