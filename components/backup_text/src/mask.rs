@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::{TryFrom, TryInto};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use tidb_query_datatype::codec::{
     convert::ConvertTo,
     data_type::{DateTime, Decimal, Duration, Enum, Set},
-    mysql::last_day_of_month,
+    mysql::{last_day_of_month, TimeType},
     Datum,
 };
 use tidb_query_datatype::expr::EvalContext;
@@ -97,7 +98,12 @@ fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     let unchecked_time = DateTime(mask_u64(time.0));
 
     // Adjust time to a valid range
-    let year = unchecked_time.year() % 10000; // 0..9999
+    let year = match time_type {
+        TimeType::Date | TimeType::DateTime => unchecked_time.year() % 10000, // 0..9999
+        // Hack! the timestampe is the number of non-leap seconds since January 1, 1970 0:00:00 UTC (aka "UNIX timestamp").
+        // the valid range is 0..(1 << 31) - 1, 2035 is an approximately upper bound
+        TimeType::Timestamp => unchecked_time.year() % (2036 - 1970) + 1970, // 1970..2035
+    };
     let month = (unchecked_time.month() % 12) + 1; // 1..12
     let day = (unchecked_time.day() % last_day_of_month(year, month)) + 1; // 1..28/29/30/31
     let hour = unchecked_time.hour() % 24; // 0..23
@@ -115,7 +121,39 @@ fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
 }
 
 fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
-    mask_f64(d.convert(ctx).unwrap()).convert(ctx).unwrap()
+    let (prec, frac) = d.prec_and_frac();
+    let int_num = prec - frac;
+    let mut masked_f64: f64 = mask_f64(d.convert(ctx).unwrap());
+    if masked_f64.is_infinite() || masked_f64.is_nan() {
+        masked_f64 = 0f64;
+    }
+    let neg = masked_f64.is_sign_negative();
+    masked_f64 = masked_f64.abs();
+
+    let s = format!("{}", masked_f64);
+    let tokens: Vec<_> = s.split('.').collect();
+
+    // Take the first `int_num` intergers
+    let left: String = tokens[0].chars().take(int_num as usize).collect();
+    let right = if tokens.len() < 2 {
+        "".to_owned()
+    } else {
+        // Take the last `frac` intergers
+        let c = tokens[1].chars().count();
+        if c > frac as usize {
+            tokens[1].chars().skip(c - frac as usize).collect()
+        } else {
+            tokens[1].chars().collect()
+        }
+    };
+    let mut res = left;
+    if !right.is_empty() {
+        res.push_str(&format!(".{}", right));
+    }
+    if neg {
+        res = format!("-{}", res);
+    }
+    Decimal::from_str(&res).unwrap()
 }
 
 pub fn workload_sim_mask(mut datum: Datum) -> Datum {
