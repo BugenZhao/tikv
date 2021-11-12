@@ -72,14 +72,12 @@ fn mask_u64(from: u64) -> u64 {
     }
 }
 
-#[inline]
-fn mask_f64(f: f64) -> f64 {
-    f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap())
-}
-
 fn mask_string(bytes: &[u8]) -> Vec<u8> {
-    let size = bytes.len();
+    let mut size = bytes.len();
     // bytes in hex format is always twice the length as the original
+    if size < 2 {
+        size = 2;
+    }
     let sum = hash_bytes(bytes, size / 2);
     let mut hex = hex::encode(sum);
     hex.push_str(&"*".repeat(size - hex.len())); // 0 or 1 '*'
@@ -120,39 +118,67 @@ fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     .unwrap()
 }
 
-fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
-    let (prec, frac) = d.prec_and_frac();
-    let int_num = prec - frac;
-    let mut masked_f64: f64 = mask_f64(d.convert(ctx).unwrap());
-    if masked_f64.is_infinite() || masked_f64.is_nan() {
-        masked_f64 = 0f64;
+fn format_float(f: f64, neg: bool, mut int_num: usize, frac: usize) -> String {
+    if int_num < 1 {
+        int_num = 1;
     }
-    let neg = masked_f64.is_sign_negative();
-    masked_f64 = masked_f64.abs();
-
-    let s = format!("{}", masked_f64);
+    let s = format!("{}", f.abs());
     let tokens: Vec<_> = s.split('.').collect();
 
     // Take the first `int_num` intergers
-    let left: String = tokens[0].chars().take(int_num as usize).collect();
+    assert!(!tokens.is_empty());
+    let left: String = tokens[0].chars().take(int_num).collect();
     let right = if tokens.len() < 2 {
         "".to_owned()
     } else {
         // Take the last `frac` intergers
         let c = tokens[1].chars().count();
-        if c > frac as usize {
-            tokens[1].chars().skip(c - frac as usize).collect()
+        if c > frac {
+            tokens[1].chars().skip(c - frac).collect()
         } else {
             tokens[1].chars().collect()
         }
     };
     let mut res = left;
+    assert!(!res.is_empty());
     if !right.is_empty() {
         res.push_str(&format!(".{}", right));
     }
     if neg {
         res = format!("-{}", res);
     }
+    res
+}
+
+#[inline]
+fn mask_f64_raw(f: f64) -> f64 {
+    let mut masked_f64 =
+        f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap());
+    if masked_f64.is_infinite() || masked_f64.is_nan() {
+        masked_f64 = 0f64;
+    }
+    masked_f64
+}
+
+fn mask_f64(f: f64) -> f64 {
+    let s = format!("{}", f);
+    let tokens: Vec<_> = s.split('.').collect();
+    let (interger_part, fract_part) = match tokens.len() {
+        0 => unreachable!(),
+        1 => (tokens[0].chars().count(), 0),
+        _ => (tokens[0].chars().count(), tokens[1].chars().count()),
+    };
+    let neg = f.is_sign_negative();
+    let masked_f64 = mask_f64_raw(f);
+    let res = format_float(masked_f64, neg, interger_part, fract_part);
+    f64::from_str(&res).unwrap()
+}
+
+fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
+    let (prec, frac) = d.prec_and_frac();
+    let neg = d.is_negative();
+    let masked_f64 = mask_f64_raw(d.convert(ctx).unwrap());
+    let res = format_float(masked_f64, neg, (prec - frac) as usize, frac as usize);
     Decimal::from_str(&res).unwrap()
 }
 
