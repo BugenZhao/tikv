@@ -267,6 +267,7 @@ pub struct BackupTextWriterBuilder {
     sst_max_size: u64,
     table_info: TableInfo,
     format: FileFormat,
+    mask_backup_data: bool,
 }
 
 impl BackupTextWriterBuilder {
@@ -277,6 +278,7 @@ impl BackupTextWriterBuilder {
         sst_max_size: u64,
         table_info_data: &[u8],
         format: FileFormat,
+        mask_backup_data: bool,
     ) -> BackupTextWriterBuilder {
         let mut table_info = TableInfo::default();
         table_info.merge_from_bytes(&table_info_data).unwrap();
@@ -287,6 +289,7 @@ impl BackupTextWriterBuilder {
             sst_max_size,
             table_info,
             format,
+            mask_backup_data,
         }
     }
 }
@@ -318,6 +321,7 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
                 self.table_info.clone(),
                 CF_DEFAULT,
                 self.format.clone(),
+                self.mask_backup_data,
                 &name,
                 None, // todo: option for compression
             )?,
@@ -325,6 +329,7 @@ impl BackupWriterBuilder for BackupTextWriterBuilder {
                 self.table_info.clone(),
                 CF_WRITE,
                 self.format.clone(),
+                self.mask_backup_data,
                 &name,
                 None, // todo: option for compression
             )?,

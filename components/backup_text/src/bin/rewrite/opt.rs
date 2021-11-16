@@ -30,6 +30,9 @@ pub struct Opt {
     /// Thread concurrency for rewriting
     #[structopt(short, long, default_value = "8")]
     pub threads: usize,
+    /// Not mask backup data
+    #[structopt(name = "not-mask", long)]
+    pub not_mask: bool,
 }
 
 #[derive(Debug, Clone, Copy, StructOpt)]

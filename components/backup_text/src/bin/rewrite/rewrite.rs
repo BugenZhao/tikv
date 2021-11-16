@@ -23,6 +23,7 @@ pub fn rewrite(
     rename_to: Option<String>,
     table_info: TableInfo,
     mode: RewriteMode,
+    not_mask: bool,
 ) -> Result<Option<File>> {
     let cf = name_to_cf(file.get_cf()).ok_or_else(|| anyhow!("bad cf name: {}", file.get_cf()))?;
     let new_name = rename_to.unwrap_or_else(|| {
@@ -57,6 +58,7 @@ pub fn rewrite(
                 table_info,
                 cf,
                 mode.file_format(),
+                !not_mask,
                 &out_tmp_path_str,
                 compression_level,
             )?;

@@ -59,6 +59,7 @@ struct Request {
     compression_type: CompressionType,
     compression_level: i32,
     table_info: Vec<u8>,
+    mask_backup_data: bool,
 }
 
 /// Backup Task.
@@ -125,6 +126,7 @@ impl Task {
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
                 table_info: req.get_table_info().to_owned(),
+                mask_backup_data: req.get_mask_backup_data(),
             },
             resp,
         };
@@ -740,6 +742,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 sst_max_size,
                                 &request.table_info,
                                 request.format,
+                                request.mask_backup_data,
                             );
                             brange.backup(
                                 writer_builder,

@@ -67,6 +67,7 @@ async fn worker(opt: Opt) -> Result<()> {
         backend,
         new_backend,
         mode,
+        not_mask,
         ..
     } = opt;
 
@@ -128,6 +129,7 @@ async fn worker(opt: Opt) -> Result<()> {
                     rename_to,
                     info,
                     mode,
+                    not_mask,
                 ) {
                     Ok(mutated_file) => {
                         let new_name = mutated_file.as_ref().map(|f| f.get_name());

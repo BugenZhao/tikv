@@ -26,6 +26,7 @@ pub struct TextWriter {
     ctx: EvalContext,
     data_type: Option<DataType>,
     format: FileFormat,
+    mask: bool,
     file_writer: Option<Box<dyn Write>>,
     schema: Schema,
     name: String,
@@ -112,6 +113,7 @@ impl TextWriter {
         table_info: TableInfo,
         cf: CfName,
         format: FileFormat,
+        mask: bool,
         name: &str,
         compression_level: Option<u32>,
     ) -> io::Result<TextWriter> {
@@ -138,6 +140,7 @@ impl TextWriter {
             ctx: eval_context(),
             data_type: None,
             format,
+            mask,
             file_writer: Some(file_writer),
             schema: Schema::new(table_info),
             name: name.to_owned(),
@@ -159,36 +162,35 @@ impl TextWriter {
             }
             self.data_type.as_ref().unwrap()
         };
-        // TODO: make `mask` as an option
-        let mask = true;
         let mut v = match self.format {
             FileFormat::Text => match (self.cf, data_type) {
                 (CF_DEFAULT, DataType::Record) => {
-                    kv_to_text(&mut self.ctx, key, val, &self.schema.columns, mask)
+                    kv_to_text(&mut self.ctx, key, val, &self.schema.columns, self.mask)
                         .unwrap()
                         .into_bytes()
                 }
                 (CF_DEFAULT, DataType::Index) => {
-                    index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns, mask)
+                    index_kv_to_text(&mut self.ctx, key, val, &self.schema.columns, self.mask)
                         .unwrap()
                         .into_bytes()
                 }
                 (CF_WRITE, DataType::Record) => {
-                    kv_to_write(&mut self.ctx, key, val, &self.schema.columns, mask).into_bytes()
+                    kv_to_write(&mut self.ctx, key, val, &self.schema.columns, self.mask)
+                        .into_bytes()
                 }
                 (CF_WRITE, DataType::Index) => {
-                    index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns, mask)
+                    index_kv_to_write(&mut self.ctx, key, val, &self.schema.columns, self.mask)
                         .into_bytes()
                 }
                 _ => unreachable!(),
             },
             FileFormat::Csv => match (self.cf, data_type) {
                 (CF_DEFAULT, DataType::Record) => {
-                    kv_to_csv(&mut self.ctx, &self.schema, key, val, mask).unwrap()
+                    kv_to_csv(&mut self.ctx, &self.schema, key, val, self.mask).unwrap()
                 }
                 (CF_WRITE, DataType::Record) => {
                     if let Some(result) =
-                        kv_to_csv_write(&mut self.ctx, &self.schema, key, val, mask)
+                        kv_to_csv_write(&mut self.ctx, &self.schema, key, val, self.mask)
                     {
                         result.unwrap()
                     } else {
