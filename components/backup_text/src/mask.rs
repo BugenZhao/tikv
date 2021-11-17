@@ -4,6 +4,7 @@ use std::convert::{TryFrom, TryInto};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use tidb_query_datatype::codec::{
     convert::ConvertTo,
     data_type::{DateTime, Decimal, Duration, Enum, Set},
@@ -84,13 +85,14 @@ fn mask_string(bytes: &[u8]) -> Vec<u8> {
     hex.into_bytes()
 }
 
-fn mask_duration(dur: Duration) -> Duration {
+fn mask_duration(dur: Duration) -> Result<Duration> {
     // hack: 3e15 is slightly smaller than the max duration (838:59:59) * 10^9 nanosecs
     let nanos = mask_i64(dur.to_nanos()) % 3_000_000_000_000_000;
-    Duration::new(nanos, 6).round_frac(dur.fsp() as i8).unwrap()
+    let dur = Duration::new(nanos, 6).round_frac(dur.fsp() as i8)?;
+    Ok(dur)
 }
 
-fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
+fn mask_time(ctx: &mut EvalContext, time: DateTime) -> Result<DateTime> {
     let (fsp, time_type) = (time.fsp(), time.get_time_type());
 
     // Get a masked but unchecked time
@@ -111,13 +113,15 @@ fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     let second = unchecked_time.second() % 60; // 0..59
     let micro = unchecked_time.micro() % 1000000; // 0..999999
 
-    DateTime::from_slice(
+    let time = DateTime::from_slice(
         ctx,
         &[year, month, day, hour, minute, second, micro][..],
         time_type,
         fsp,
     )
-    .unwrap()
+    .ok_or_else(|| anyhow!("failed to mask time"))?;
+
+    Ok(time)
 }
 
 fn format_float(mut f: f64, neg: bool, mut int_num: usize, frac: usize) -> String {
@@ -146,16 +150,16 @@ fn format_float(mut f: f64, neg: bool, mut int_num: usize, frac: usize) -> Strin
 }
 
 #[inline]
-fn mask_f64_raw(f: f64) -> f64 {
+fn mask_f64_raw(f: f64) -> Result<f64> {
     let bytes = hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap();
     let mut masked_f64 = f64::from_le_bytes(bytes);
     if masked_f64.is_infinite() || masked_f64.is_nan() {
         masked_f64 = u64::from_le_bytes(bytes) as f64;
     }
-    masked_f64
+    Ok(masked_f64)
 }
 
-fn mask_f64(mut f: f64) -> f64 {
+fn mask_f64(mut f: f64) -> Result<f64> {
     let neg = f.is_sign_negative();
     f = f.abs();
 
@@ -166,18 +170,22 @@ fn mask_f64(mut f: f64) -> f64 {
         1 => (tokens[0].chars().count(), 0),
         _ => (tokens[0].chars().count(), tokens[1].chars().count()),
     };
-    let masked_f64 = mask_f64_raw(f);
+    let masked_f64 = mask_f64_raw(f)?;
     let res = format_float(masked_f64, neg, interger_part, fract_part);
-    f64::from_str(&res).unwrap()
+    let f = f64::from_str(&res)?;
+
+    Ok(f)
 }
 
-fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
+fn mask_decimal(ctx: &mut EvalContext, d: Decimal) -> Result<Decimal> {
     let (prec, frac) = d.prec_and_frac();
     let neg = d.is_negative();
-    let f: f64 = d.convert(ctx).unwrap();
-    let masked_f64 = mask_f64_raw(f.abs());
+    let f: f64 = d.convert(ctx)?;
+    let masked_f64 = mask_f64_raw(f.abs())?;
     let res = format_float(masked_f64, neg, (prec - frac) as usize, frac as usize);
-    Decimal::from_str(&res).unwrap()
+    let d = Decimal::from_str(&res)?;
+
+    Ok(d)
 }
 
 pub fn workload_sim_mask(mut datum: Datum) -> Datum {
@@ -188,14 +196,14 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
         Datum::Max => {}
         Datum::I64(i) => *i = mask_i64(*i),
         Datum::U64(u) => *u = mask_u64(*u),
-        Datum::F64(f) => *f = mask_f64(*f),
+        Datum::F64(f) => *f = mask_f64(*f).unwrap_or(*f),
         Datum::Bytes(bytes) => *bytes = mask_string(bytes),
         Datum::Enum(e) => {
             let masked_name = mask_string(e.name());
             *e = Enum::new(masked_name, e.value())
         }
-        Datum::Dur(dur) => *dur = mask_duration(*dur),
-        Datum::Time(time) => *time = mask_time(ctx, *time),
+        Datum::Dur(dur) => *dur = mask_duration(*dur).unwrap_or(*dur),
+        Datum::Time(time) => *time = mask_time(ctx, *time).unwrap_or(*time),
         Datum::Set(s) => {
             let (data, value) = (s.data(), s.value());
             let mut masked_data = BufferVec::with_capacity(data.capacity(), data.data_capacity());
@@ -204,7 +212,7 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
             }
             *s = Set::new(Arc::new(masked_data), value);
         }
-        Datum::Dec(d) => *d = mask_decimal(ctx, &d),
+        Datum::Dec(d) => *d = mask_decimal(ctx, *d).unwrap_or(*d),
         Datum::Json(_) => {
             // todo: not supported yet
         }
@@ -212,7 +220,7 @@ pub fn workload_sim_mask(mut datum: Datum) -> Datum {
     datum
 }
 
-pub fn mask_bytes(b: &mut HrBytes) {
+pub fn mask_hr_bytes(b: &mut HrBytes) {
     match b {
         HrBytes::Utf8(s) => {
             // Safety depend on `mask_string` return a slice of bytes of valid utf8 string
@@ -228,9 +236,9 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
         HrDatum::Null | HrDatum::Max | HrDatum::Min => {}
         HrDatum::I64(i) => *i = mask_i64(*i),
         HrDatum::U64(u) => *u = mask_u64(*u),
-        HrDatum::F64(f) => *f = mask_f64(*f),
-        HrDatum::Bytes(b) => mask_bytes(b),
-        HrDatum::Enum(e) => mask_bytes(&mut e.name),
+        HrDatum::F64(f) => *f = mask_f64(*f).unwrap_or(*f),
+        HrDatum::Bytes(b) => mask_hr_bytes(b),
+        HrDatum::Enum(e) => mask_hr_bytes(&mut e.name),
         HrDatum::Set(set) => {
             match set.data {
                 HrBytes::Utf8(ref mut s) => {
@@ -250,9 +258,24 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
             }
         }
         // TODO: support directly mask `HrDatum::Dur`, `HrDatum::Time` and `HrDatum::Dec`
-        HrDatum::Dur(d) => *d = HrDuration::from(mask_duration(d.to_duration())),
-        HrDatum::Time(t) => *t = HrTime::from(mask_time(ctx, t.to_time())),
-        HrDatum::Dec(d) => *d = HrDecimal::from(mask_decimal(ctx, &d.to_decimal())),
+        HrDatum::Dur(d) => {
+            *d = {
+                let raw_d = d.to_duration(ctx);
+                HrDuration::from(mask_duration(raw_d).unwrap_or(raw_d))
+            }
+        }
+        HrDatum::Time(t) => {
+            *t = {
+                let raw_t = t.to_time();
+                HrTime::from(mask_time(ctx, raw_t).unwrap_or(raw_t))
+            }
+        }
+        HrDatum::Dec(d) => {
+            *d = {
+                let raw_d = d.to_decimal();
+                HrDecimal::from(mask_decimal(ctx, raw_d).unwrap_or(raw_d))
+            }
+        }
         // TODO: not supported yet
         HrDatum::Json(_) => {}
     }

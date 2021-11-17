@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tidb_query_datatype::codec::data_type::{Decimal, Duration, Enum, Json, Set};
 use tidb_query_datatype::codec::mysql::Time;
 use tidb_query_datatype::codec::Datum;
+use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::buffer_vec::BufferVec;
 use tikv_util::escape;
@@ -54,8 +55,8 @@ impl HrDuration {
             fsp: d.fsp(),
         }
     }
-    pub fn to_duration(&self) -> Duration {
-        Duration::parse(&mut eval_context(), &self.value, self.fsp as i8).unwrap()
+    pub fn to_duration(&self, ctx: &mut EvalContext) -> Duration {
+        Duration::parse(ctx, &self.value, self.fsp as i8).unwrap()
     }
 }
 
@@ -87,12 +88,6 @@ impl From<Decimal> for HrDecimal {
         let (prec, _) = d.preferred_prec_and_frac();
         let value = d.to_string();
         Self { value, prec }
-    }
-}
-
-impl Into<Decimal> for HrDecimal {
-    fn into(self) -> Decimal {
-        self.to_decimal()
     }
 }
 
@@ -251,10 +246,10 @@ impl Into<Datum> for HrDatum {
             HrDatum::I64(v) => Datum::I64(v),
             HrDatum::U64(v) => Datum::U64(v),
             HrDatum::F64(v) => Datum::F64(v),
-            HrDatum::Dur(d) => Datum::Dur(Duration::parse(ctx, &d.value, d.fsp as i8).unwrap()),
+            HrDatum::Dur(d) => Datum::Dur(d.to_duration(ctx)),
             HrDatum::Bytes(b) => Datum::Bytes(b.into()),
-            HrDatum::Dec(d) => Datum::Dec(d.into()),
-            HrDatum::Time(t) => Datum::Time(Time(t.raw)),
+            HrDatum::Dec(d) => Datum::Dec(d.to_decimal()),
+            HrDatum::Time(t) => Datum::Time(t.to_time()),
             HrDatum::Json(j) => Datum::Json(j.0),
             HrDatum::Enum(e) => Datum::Enum(Enum::new(e.name.into(), e.value)),
             HrDatum::Set(s) => Datum::Set(Set::new(
