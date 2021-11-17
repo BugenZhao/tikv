@@ -85,15 +85,17 @@ fn mask_string(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn mask_duration(dur: Duration) -> Duration {
-    let nanos = mask_i64(dur.to_nanos());
-    Duration::new(nanos, dur.fsp())
+    // hack: 3e15 is slightly smaller than the max duration (838:59:59) * 10^9 nanosecs
+    let nanos = mask_i64(dur.to_nanos()) % 3_000_000_000_000_000;
+    Duration::new(nanos, 6).round_frac(dur.fsp() as i8).unwrap()
 }
 
 fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     let (fsp, time_type) = (time.fsp(), time.get_time_type());
 
     // Get a masked but unchecked time
-    let unchecked_time = DateTime(mask_u64(time.0));
+    let core_time = time.0 & (!0b1111);
+    let unchecked_time = DateTime(mask_u64(core_time));
 
     // Adjust time to a valid range
     let year = match time_type {
@@ -118,57 +120,52 @@ fn mask_time(ctx: &mut EvalContext, time: DateTime) -> DateTime {
     .unwrap()
 }
 
-fn format_float(f: f64, neg: bool, mut int_num: usize, frac: usize) -> String {
-    if int_num < 1 {
-        int_num = 1;
-    }
-    let s = format!("{}", f.abs());
-    let tokens: Vec<_> = s.split('.').collect();
+fn format_float(mut f: f64, neg: bool, mut int_num: usize, frac: usize) -> String {
+    f = f.abs();
+    int_num = int_num.max(1);
 
-    // Take the first `int_num` intergers
-    assert!(!tokens.is_empty());
-    let left: String = tokens[0].chars().take(int_num).collect();
-    let right = if tokens.len() < 2 {
-        "".to_owned()
+    let mut s: String = format!("{:.10e}", f)
+        .chars()
+        .filter(|c| c.is_numeric())
+        .collect();
+
+    if s.len() < int_num {
+        s.push_str(&"0".repeat(int_num - s.len()));
+    }
+
+    let left = &s[..int_num];
+    let right = &s[int_num..s.len().min(int_num + frac)];
+
+    let res = if right.is_empty() {
+        left.to_owned()
     } else {
-        // Take the last `frac` intergers
-        let c = tokens[1].chars().count();
-        if c > frac {
-            tokens[1].chars().skip(c - frac).collect()
-        } else {
-            tokens[1].chars().collect()
-        }
+        format!("{}.{}", left, right)
     };
-    let mut res = left;
-    assert!(!res.is_empty());
-    if !right.is_empty() {
-        res.push_str(&format!(".{}", right));
-    }
-    if neg {
-        res = format!("-{}", res);
-    }
-    res
+
+    if neg { format!("-{}", res) } else { res }
 }
 
 #[inline]
 fn mask_f64_raw(f: f64) -> f64 {
-    let mut masked_f64 =
-        f64::from_le_bytes(hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap());
+    let bytes = hash_bytes(&mut f.to_le_bytes(), 8).try_into().unwrap();
+    let mut masked_f64 = f64::from_le_bytes(bytes);
     if masked_f64.is_infinite() || masked_f64.is_nan() {
-        masked_f64 = 0f64;
+        masked_f64 = u64::from_le_bytes(bytes) as f64;
     }
     masked_f64
 }
 
-fn mask_f64(f: f64) -> f64 {
-    let s = format!("{}", f);
+fn mask_f64(mut f: f64) -> f64 {
+    let neg = f.is_sign_negative();
+    f = f.abs();
+
+    let s = f.to_string();
     let tokens: Vec<_> = s.split('.').collect();
     let (interger_part, fract_part) = match tokens.len() {
         0 => unreachable!(),
         1 => (tokens[0].chars().count(), 0),
         _ => (tokens[0].chars().count(), tokens[1].chars().count()),
     };
-    let neg = f.is_sign_negative();
     let masked_f64 = mask_f64_raw(f);
     let res = format_float(masked_f64, neg, interger_part, fract_part);
     f64::from_str(&res).unwrap()
@@ -177,7 +174,8 @@ fn mask_f64(f: f64) -> f64 {
 fn mask_decimal(ctx: &mut EvalContext, d: &Decimal) -> Decimal {
     let (prec, frac) = d.prec_and_frac();
     let neg = d.is_negative();
-    let masked_f64 = mask_f64_raw(d.convert(ctx).unwrap());
+    let f: f64 = d.convert(ctx).unwrap();
+    let masked_f64 = mask_f64_raw(f.abs());
     let res = format_float(masked_f64, neg, (prec - frac) as usize, frac as usize);
     Decimal::from_str(&res).unwrap()
 }
@@ -252,12 +250,8 @@ pub fn mask_hr_datum(hr_datum: &mut HrDatum) {
             }
         }
         // TODO: support directly mask `HrDatum::Dur`, `HrDatum::Time` and `HrDatum::Dec`
-        HrDatum::Dur(d) => {
-            *d = HrDuration::from(mask_duration(d.to_duration()));
-        }
-        HrDatum::Time(t) => {
-            *t = HrTime::from(mask_time(ctx, t.to_time()));
-        }
+        HrDatum::Dur(d) => *d = HrDuration::from(mask_duration(d.to_duration())),
+        HrDatum::Time(t) => *t = HrTime::from(mask_time(ctx, t.to_time())),
         HrDatum::Dec(d) => *d = HrDecimal::from(mask_decimal(ctx, &d.to_decimal())),
         // TODO: not supported yet
         HrDatum::Json(_) => {}
@@ -282,7 +276,30 @@ mod tests {
             (Datum::U64(420000), Datum::U64(2775696)),                    // 24
             (Datum::U64(42000000), Datum::U64(107435102)),                // 32
             (Datum::U64(420000000000), Datum::U64(16562153417862826527)), // 64
-            (Datum::F64(42.42), Datum::F64(7818787403329284e135)),
+            (Datum::F64(42.42), Datum::F64(78.18)),
+            (Datum::F64(-42.42), Datum::F64(-78.18)),
+            (Datum::F64(4242.), Datum::F64(1188.)),
+            (Datum::F64(0.4242), Datum::F64(1.0003)),
+            (Datum::F64(4.2e10), Datum::F64(3.0508343005e+10)),
+            (Datum::F64(4.2e20), Datum::F64(1.5036856769116e+20)),
+            (Datum::F64(4.2e-10), Datum::F64(2.54857468602)),
+            (Datum::F64(4.2e-20), Datum::F64(9.054866296551)),
+            (
+                Datum::Dec("42.42".parse().unwrap()),
+                Datum::Dec("78.18".parse().unwrap()),
+            ),
+            (
+                Datum::Dec("-42.42".parse().unwrap()),
+                Datum::Dec("-78.18".parse().unwrap()),
+            ),
+            (
+                Datum::Dec("4242".parse().unwrap()),
+                Datum::Dec("1188".parse().unwrap()),
+            ),
+            (
+                Datum::Dec("0.4242".parse().unwrap()),
+                Datum::Dec("1.0003".parse().unwrap()),
+            ),
             (
                 Datum::Bytes("你好".as_bytes().to_vec()),
                 Datum::Bytes(b"ba3468".to_vec()),
@@ -297,18 +314,18 @@ mod tests {
             ),
             (
                 Datum::Dur(Duration::parse(ctx, "10:11:12.1314", 4).unwrap()),
-                Datum::Dur(Duration::parse(ctx, "10:00:00.0000", 4).unwrap()),
+                Datum::Dur(Duration::parse(ctx, "307:05:33.1856", 4).unwrap()),
             ),
             (
                 Datum::Time(DateTime::parse_date(ctx, "2021-10-19").unwrap()),
-                Datum::Time(DateTime::parse_date(ctx, "2021-10-19").unwrap()),
+                Datum::Time(DateTime::parse_date(ctx, "1706-05-07").unwrap()),
             ),
             (
                 Datum::Time(
                     DateTime::parse_datetime(ctx, "2021-10-19 12:34:56.7890", 4, false).unwrap(),
                 ),
                 Datum::Time(
-                    DateTime::parse_datetime(ctx, "2021-10-19 00:00:00.0000", 4, false).unwrap(),
+                    DateTime::parse_datetime(ctx, "0939-03-21 14:01:42.5772", 4, false).unwrap(),
                 ),
             ),
             (
@@ -316,7 +333,7 @@ mod tests {
                     DateTime::parse_timestamp(ctx, "2021-10-19 12:34:56.7890", 4, false).unwrap(),
                 ),
                 Datum::Time(
-                    DateTime::parse_timestamp(ctx, "2021-10-19 00:00:00.0000", 4, false).unwrap(),
+                    DateTime::parse_timestamp(ctx, "2019-03-21 14:01:42.5772", 4, false).unwrap(),
                 ),
             ),
         ];
@@ -324,7 +341,7 @@ mod tests {
         for (from, expected) in datum_pairs {
             let to = workload_sim_mask(from);
             println!("{:?}", to);
-            assert_eq!(to, expected);
+            assert_eq!(expected.to_string().unwrap(), to.to_string().unwrap()); // fixme: cannot expect the bit representation to be exactly same now
         }
     }
 }
