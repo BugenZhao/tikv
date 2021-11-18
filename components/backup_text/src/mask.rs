@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use tidb_query_datatype::codec::mysql::MAX_FSP;
 use tidb_query_datatype::codec::{
     convert::ConvertTo,
     data_type::{DateTime, Decimal, Duration, Enum, Set},
@@ -88,15 +89,17 @@ fn mask_string(bytes: &[u8]) -> Vec<u8> {
 fn mask_duration(dur: Duration) -> Result<Duration> {
     // hack: 3e15 is slightly smaller than the max duration (838:59:59) * 10^9 nanosecs
     let nanos = mask_i64(dur.to_nanos()) % 3_000_000_000_000_000;
-    let dur = Duration::new(nanos, 6).round_frac(dur.fsp() as i8)?;
+    let dur = Duration::new(nanos, MAX_FSP as u8).round_frac(dur.fsp() as i8)?;
     Ok(dur)
 }
 
 fn mask_time(ctx: &mut EvalContext, time: DateTime) -> Result<DateTime> {
     let (fsp, time_type) = (time.fsp(), time.get_time_type());
 
-    // Get a masked but unchecked time
+    // The least significant 4 bits are used to store `fsp`,
+    // we ignore them here to get the `core_time` which keeps consistent with TiDB
     let core_time = time.0 & (!0b1111);
+    // Get a masked but unchecked time
     let unchecked_time = DateTime(mask_u64(core_time));
 
     // Adjust time to a valid range
@@ -140,13 +143,15 @@ fn format_float(mut f: f64, neg: bool, mut int_num: usize, frac: usize) -> Strin
     let left = &s[..int_num];
     let right = &s[int_num..s.len().min(int_num + frac)];
 
-    let res = if right.is_empty() {
-        left.to_owned()
-    } else {
-        format!("{}.{}", left, right)
-    };
-
-    if neg { format!("-{}", res) } else { res }
+    let mut res = left.to_owned();
+    if !right.is_empty() {
+        res.push_str(".");
+        res.push_str(right);
+    }
+    if neg {
+        res = format!("-{}", res);
+    }
+    res
 }
 
 #[inline]
